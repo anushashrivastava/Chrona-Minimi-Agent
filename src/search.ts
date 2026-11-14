@@ -67,7 +67,11 @@ export class SourceRegistry {
 export function renumberCitations(answer: string, seen: SourceRef[]): { answer: string; sources: SourceRef[] } {
   const byN = new Map(seen.map((s) => [s.n, s]));
   const map = new Map<number, number>();
-  const text = answer.replace(/\s*\[(\d+)\]/g, (m, raw) => {
+  // The model sometimes writes "[1, 5]" or "[1,5]"; split into "[1][5]" so each is checked and renumbered.
+  const split = answer.replace(/\[(\d+(?:\s*,\s*\d+)+)\]/g, (_, list: string) =>
+    list.split(/\s*,\s*/).map((n) => `[${n}]`).join(""),
+  );
+  const text = split.replace(/\s*\[(\d+)\]/g, (m, raw) => {
     const n = Number(raw);
     if (!byN.has(n)) return "";
     if (!map.has(n)) map.set(n, map.size + 1);

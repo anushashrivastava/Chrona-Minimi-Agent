@@ -193,6 +193,9 @@ const { renumberCitations } = await import("../src/search.js");
 const src = (n: number) => ({ n, title: `t${n}`, url: `https://x/${n}` });
 assert.deepEqual(renumberCitations("a [21][23] b [21] c [99]", [src(21), src(23)]), { answer: "a [1][2] b [1] c", sources: [{ ...src(21), n: 1 }, { ...src(23), n: 2 }] });
 assert.equal(renumberCitations("already [1] then [2]", [src(1), src(2)]).answer, "already [1] then [2]"); // identity: no resend
+// citation lists "[1, 5]" / "[1,5]" are split, then checked and renumbered like single markers
+assert.deepEqual(renumberCitations("a [5, 1] b [1,5] c [5, 99]", [src(1), src(5)]), { answer: "a [1][2] b [2][1] c [1]", sources: [{ ...src(5), n: 1 }, { ...src(1), n: 2 }] });
+assert.equal(renumberCitations("Python 3.15 [2026] is out", [src(1)]).answer, "Python 3.15 is out"); // a bare number with no source is still dropped
 
 // 4d. every search failed: no citations survive, and code appends a fixed "could not be checked" note
 tavilyDown = true;
