@@ -25,9 +25,15 @@ Model `gemini-3.5-flash-lite`, summary `gemini-3.1-flash-lite`, Tavily basic. Or
 9. **FIXED**: `THINKING_BUDGET=0` (as the old docs suggested) returns 400 on gemini-3.5-flash-lite. Docs now say leave it empty.
 
 ## Cold start (empty history, grader prompts), 2026-11-14
-10. **OPEN: no-record lead is unreliable.** `cold-shortlist-named`: lists current prices/news per tool but never says it has no record of Monday or names 9 Nov (3/3 runs). `cold-postgres-no-record`: once "I have no record of our conversation last Tuesday, 3 November 2026" (wrong date, it is 10 Nov) followed by price-less "could not confirm" lines; once stopped after the no-record sentence. Three wording attempts.
+10. **PARTLY FIXED / A2 KNOWN LIMIT.** Code now states the no-record line for "I asked you / did I ask" + one named day (A3 and the A4 lead are exact, right date). A2 ("we shortlisted", no code lead): after removing the injected "no conversation saved" line it gives cited current prices and news per tool, with no fabricated then-values, but still does not say it has no earlier figures or name Monday 9 Nov. Was: `cold-shortlist-named`: lists current prices/news per tool but never says it has no record of Monday or names 9 Nov (3/3 runs). `cold-postgres-no-record`: once "I have no record of our conversation last Tuesday, 3 November 2026" (wrong date, it is 10 Nov) followed by price-less "could not confirm" lines; once stopped after the no-record sentence. Three wording attempts.
 11. **FIXED (wording)**: with no history the model fabricated "then" values in the re-check format. Re-check section now applies only with the earlier answer in view.
 12. **FIXED/TESTED**: dead `[n]` citations stripped (code); all-searches-failed note (code); conflicting sources named (prompt, fake-search scenario).
+
+## Final full run before feature freeze (2026-11-14): open, NOT fixed (freeze)
+13. **OPEN, BUG: fabricated "then" values after the code lead.** `cold-postgres-no-record` passed its asserts but answered "Supabase Pro: then $25/month → now $25/month [1] — Unchanged" with NO history, so the "then" is invented. The A4 eval does not forbid "then … →" (A2's does), so it passed. The tally guard correctly added no Summary.
+14. **OPEN, BUG: empty forced answer.** `parallel-official-sources`: 2 search rounds, then the forced final round (tools off) returned no text, so the user got the fallback message. First occurrence; plausibly linked to the round cap of 2 (the forced round now runs more often).
+15. **EVAL FALSE NEGATIVES** (correct answers, regex too strict): `cold-shortlist-unnamed` ("...please name them so I can check..." has no "?"); `s8-conflicting-sources` ("costs either $24 or $29 per month depending on the source [1][2]" lacks the listed keywords).
+16. **Minor**: the model sometimes writes "[1, 5]"; `renumberCitations` only handles "[n]", so those are not renumbered or validated.
 
 ## Worked well (keep)
 - Recall by date, with the exact question and answer, in 1.2 s, no search.

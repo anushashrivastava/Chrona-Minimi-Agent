@@ -184,7 +184,11 @@ export async function runTurn(opts: {
   // says it (guards in memory.ts) and the model is told it was already said, so it goes straight on.
   const lead = noRecordLead(message, rec, recent.length, time);
   const leadText = lead ? `${lead}\n\n` : "";
-  const brief = [lead ? `Already told the user: "${lead}"` : "", buildMemoryBrief(rec)].filter(Boolean).join("\n\n");
+  // The "no conversation saved" line only rides along with the code lead. Without the lead (e.g. "we shortlisted
+  // on Monday"), the model turned that line into "no record" repeated per item plus invented then→now lines.
+  const brief = [lead ? `Already told the user: "${lead}"` : "", buildMemoryBrief(rec, { missingLine: !!lead })]
+    .filter(Boolean)
+    .join("\n\n");
   const contents: Content[] = [];
   for (const t of recent) {
     contents.push({ role: "user", parts: [{ text: `[${describeInstant(t.ts, t.tz)}] ${t.user_text}` }] });

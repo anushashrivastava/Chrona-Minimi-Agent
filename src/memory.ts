@@ -265,10 +265,10 @@ export function noRecordLead(text: string, r: Recall, recentCount: number, time:
  * answering the still-answerable part of a question. Dates are spelled out ("Monday 9 November 2026")
  * so the model does not have to work out the weekday itself.
  */
-export function buildMemoryBrief(r: Recall): string {
+export function buildMemoryBrief(r: Recall, opts: { missingLine?: boolean } = {}): string {
   const parts: string[] = [];
   const days = (ds: string[]) => ds.map(describeDate).join(" or ");
-  if (r.missingDates.length) parts.push(`No conversation is saved for ${days(r.missingDates)}.`);
+  if (r.missingDates.length && opts.missingLine !== false) parts.push(`No conversation is saved for ${days(r.missingDates)}.`);
   if (r.inTranscriptDates.length) parts.push(`The conversation on ${days(r.inTranscriptDates)} is in the chat above.`);
   if (r.byDate.length) parts.push(`### Saved conversations from ${days(r.dates)}\n` + r.byDate.map(fmtTurn).join("\n\n"));
   if (r.byTopic.length) parts.push("### Possibly related earlier conversations\n" + r.byTopic.map(fmtTurn).join("\n\n"));
