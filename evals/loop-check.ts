@@ -52,7 +52,7 @@ const mockGemini = http.createServer(async (req, res) => {
   if (last.parts.some((p: any) => p.functionResponse)) {
     res.write(sse(cand([{ text: "Node 24 is the current LTS " }])));
     // "bogus": cite a source number the search never returned ([7]) next to a real one
-    res.write(sse(cand([{ text: /bogus/i.test(firstUser) ? "[1][7], per a guide [9]." : "[1]." }], "STOP")));
+    res.write(sse(cand([{ text: /bogus/i.test(firstUser) ? "[1][7], per a guide [9]." : /renumber/i.test(firstUser) ? "[2]. Also [1][2]." : "[1]." }], "STOP")));
   } else if (/restate/i.test(lastText)) {
     // the model restates the code's lead line (as flash-lite did, word for word), split across chunks
     res.write(sse(cand([{ text: "I have no record of a conv" }])));
@@ -61,7 +61,7 @@ const mockGemini = http.createServer(async (req, res) => {
     // model writes some text, THEN decides to search: the server must reset, keeping its own lead line
     res.write(sse(cand([{ text: "Let me check that. " }, { functionCall: { id: "p1", name: "web_search", args: { query: "node lts prelude" } } }], "STOP")));
   } else if (/latest/i.test(lastText)) {
-    const q = /fail/i.test(lastText) ? "latest node lts (fail)" : "latest node lts"; // distinct query: bypass the search cache
+    const q = /fail/i.test(lastText) ? "latest node lts (fail)" : /renumber/i.test(lastText) ? "latest node lts (renumber)" : "latest node lts"; // distinct query: bypass the search cache
     res.write(sse(cand([{ functionCall: { id: "c1", name: "web_search", args: { query: q } } }, { functionCall: { id: "c2", name: "web_search", args: { query: `${q} schedule`, since: "2026-01-01" } } }], "STOP")));
   } else if (/still correct/i.test(lastText)) {
     // a re-check answer: labelled item lines, no tally (the server must compute it)
@@ -84,7 +84,9 @@ const mockTavily = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ error: "down" }));
   }
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ results: [{ title: "Node.js releases", url: "https://nodejs.org/en/about/previous-releases", content: "Node 24 is Active LTS.", published_date: "2026-10-01" }] }));
+  const node = { title: "Node.js releases", url: "https://nodejs.org/en/about/previous-releases", content: "Node 24 is Active LTS.", published_date: "2026-10-01" };
+  const extra = { title: "Node.js blog", url: "https://nodejs.org/en/blog", content: "Node 26 is Current.", published_date: "2026-11-01" };
+  res.end(JSON.stringify({ results: /renumber/.test(tavilyBodies.at(-1)?.query ?? "") ? [node, extra] : [node] }));
 });
 
 const listen = (s: http.Server) => new Promise<number>((r) => s.listen(0, () => r((s.address() as AddressInfo).port)));
@@ -166,6 +168,19 @@ const lastReset = ev4c.map((e) => e.type).lastIndexOf("reset");
 assert.ok(lastReset > 0 && ev4c[lastReset + 1]?.delta === r4c.answer, "cleaned text resent after reset");
 assert.equal(allTurns("u").find((t) => t.id === r4c.turnId)?.answer_text, r4c.answer);
 assert.deepEqual(r4c.sources.map((s) => s.n), [1]);
+
+// 4c'. citations renumbered by FIRST APPEARANCE: the model cites registry [2] first, so it becomes [1];
+//      chips (sources) carry the new numbers in that order; the saved answer matches what was shown
+const ev4r: { type: string; delta?: string }[] = [];
+const r4r = await runTurn({ userId: "u", message: "latest Node? (renumber)", time, onEvent: (e) => ev4r.push(e as any) });
+assert.equal(r4r.answer, "Node 24 is the current LTS [1]. Also [2][1].");
+assert.deepEqual(r4r.sources.map((s) => [s.n, s.url]), [[1, "https://nodejs.org/en/blog"], [2, "https://nodejs.org/en/about/previous-releases"]]);
+assert.deepEqual((ev4r.find((e) => e.type === "sources") as any).sources.map((s: any) => s.n), [1, 2]);
+assert.equal(allTurns("u").find((t) => t.id === r4r.turnId)?.answer_text, r4r.answer);
+const { renumberCitations } = await import("../src/search.js");
+const src = (n: number) => ({ n, title: `t${n}`, url: `https://x/${n}` });
+assert.deepEqual(renumberCitations("a [21][23] b [21] c [99]", [src(21), src(23)]), { answer: "a [1][2] b [1] c", sources: [{ ...src(21), n: 1 }, { ...src(23), n: 2 }] });
+assert.equal(renumberCitations("already [1] then [2]", [src(1), src(2)]).answer, "already [1] then [2]"); // identity: no resend
 
 // 4d. every search failed: no citations survive, and code appends a fixed "could not be checked" note
 tavilyDown = true;

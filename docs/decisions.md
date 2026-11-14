@@ -130,3 +130,8 @@ Three wording rounds did not make the model state "no record" reliably (skipped 
 - **No computed tally without history**: with nothing earlier in view, "then → now" lines are invented (A2 wrote "then not recorded → now ..."), and a Summary would make the invention look checked.
 - **A prompt line offered "or nothing more if there is nothing to check"**, and after searching 4 times the model wrote nothing for A4. Removed. (Lesson again: every option you offer the model is one it will take.)
 - *Rejected*: a classifier call (extra request every turn); prefilling a model turn with the lead (not verified in the Gemini docs, and it interacts with function calling).
+
+## Citations renumbered by first appearance
+- Registry numbers follow the order search results ARRIVED across all parallel searches, so answers cited `[21][23]` with chips "21 · hubspot.com". `renumberCitations()` (search.ts) now renumbers cited sources 1, 2, 3... in order of first appearance in the answer, drops numbers the turn never saw (replacing the separate strip step), and returns the chips with the same numbers in the same order. When the text changes, it is resent whole via the existing `reset` event; what is saved (answer + sources_json) is exactly what was shown, so history after reload matches. No UI change: the UI already keys links and chips on `n`.
+- *Rejected*: numbering at registration time by "first cited" (the model sees result numbers before it writes, so they must be stable while it writes); renumbering only in the UI (saved history and the API would disagree with what users saw).
+- Tests: `check:loop` 4c' (model cites [2] before [1] → becomes [1], chips and saved answer match) plus unit asserts (`[21][23]` → `[1][2]`, identity case needs no resend).

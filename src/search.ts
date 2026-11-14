@@ -58,6 +58,25 @@ export class SourceRegistry {
   }
 }
 
+/**
+ * Final citation pass over an answer. Registry numbers follow the order results ARRIVED (an answer could
+ * cite [21][23]), so cited sources are renumbered 1, 2, 3... in order of FIRST APPEARANCE in the text, and
+ * the chips get the same numbers. Any [n] this turn never saw is dropped in the same pass: a dead
+ * citation looks like evidence and is not.
+ */
+export function renumberCitations(answer: string, seen: SourceRef[]): { answer: string; sources: SourceRef[] } {
+  const byN = new Map(seen.map((s) => [s.n, s]));
+  const map = new Map<number, number>();
+  const text = answer.replace(/\s*\[(\d+)\]/g, (m, raw) => {
+    const n = Number(raw);
+    if (!byN.has(n)) return "";
+    if (!map.has(n)) map.set(n, map.size + 1);
+    return m.replace(raw, String(map.get(n)));
+  });
+  const sources = [...map].map(([old, n]) => ({ ...byN.get(old)!, n }));
+  return { answer: text, sources };
+}
+
 // Tiny in-process cache: the same query on the same day returns the same answer, so skip the network.
 const cache = new Map<string, { at: number; results: RawResult[] }>();
 const TTL_MS = 10 * 60 * 1000;

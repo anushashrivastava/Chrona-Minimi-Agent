@@ -23,7 +23,7 @@ import {
 import { dynamicPrompt, STABLE_PROMPT, SUMMARY_PROMPT } from "./prompt.js";
 import { withModelFallback } from "./models.js";
 import { summaryLine } from "./verdict.js";
-import { runSearch, searchTool, SourceRegistry, type SearchInput } from "./search.js";
+import { renumberCitations, runSearch, searchTool, SourceRegistry, type SearchInput } from "./search.js";
 import { describeInstant, localDate, type TimeCtx } from "./time.js";
 
 export type AgentEvent =
@@ -257,14 +257,13 @@ export async function runTurn(opts: {
     });
   }
 
-  // A citation must point at a source this turn actually saw. The model can cite a number it never got
-  // (or one from an earlier turn in the transcript); a dead [n] looks like evidence and is not. Strip it.
-  // Rare, so when it happens we resend the cleaned text with the existing `reset` event rather than
-  // complicating the stream; the saved answer is the cleaned one.
-  const known = new Set(registry.list().map((s) => s.n));
-  const cleaned = answer.replace(/\s*\[(\d+)\]/g, (m, n) => (known.has(Number(n)) ? m : ""));
-  if (cleaned !== answer) {
-    answer = cleaned;
+  // Citations: renumber cited sources 1, 2, 3... by first appearance and drop any [n] this turn never saw
+  // (renumberCitations). If the text changed, resend it whole with the existing `reset` event: it lands in
+  // one tick, so the user sees the numbers settle, and what is saved is exactly what is shown.
+  const fixed = renumberCitations(answer, registry.list());
+  const sources = fixed.sources;
+  if (fixed.answer !== answer) {
+    answer = fixed.answer;
     emit({ type: "reset" });
     emit({ type: "text", delta: answer });
   }
@@ -300,10 +299,7 @@ export async function runTurn(opts: {
     emit({ type: "text", delta });
   }
 
-  // Only keep sources the answer actually cites; [n] already matches the registry numbers.
-  const cited = new Set([...answer.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])));
-  const sources = registry.list().filter((s) => cited.has(s.n));
-  if (sources.length) emit({ type: "sources", sources });
+  if (sources.length) emit({ type: "sources", sources }); // only cited ones, numbered as in the text
 
   const timings: Timings = { firstTokenMs, totalMs: Date.now() - t0, rounds };
   emit({ type: "done", timings, searches });
