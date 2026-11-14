@@ -4,10 +4,38 @@
 import { runTurn, type TurnResult } from "../src/agent.js";
 import { allTurns, resetDb, saveTurn, type Claim } from "../src/memory.js";
 import { makeTimeCtx } from "../src/time.js";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 
 process.env.ALLOW_FAKE_NOW = "1";
 const tz = "Asia/Kolkata";
-const NOW = "2026-11-14T10:00:00+05:30"; // a Saturday
+const NOW = "2026-11-14T10:00:00+05:30"; // a Saturday. Every scenario runs at this fixed clock.
+
+// Fake search for scenarios that must control what search returns (failure, conflicting sources).
+// Real Gemini still answers; only Tavily is replaced, so these scenarios cost 0 search credits.
+interface FakeResult { title: string; url: string; content: string; published_date?: string }
+type FakeSearch = { fail: true } | { results: FakeResult[] };
+let fake: FakeSearch = { results: [] } as FakeSearch;
+const fakeTavily = http.createServer((req, res) => {
+  req.resume();
+  req.on("end", () => {
+    if ("fail" in fake) {
+      res.writeHead(503, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "fake outage" }));
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ results: fake.results }));
+  });
+});
+await new Promise<void>((r) => fakeTavily.listen(0, () => r()));
+const fakeUrl = `http://127.0.0.1:${(fakeTavily.address() as AddressInfo).port}`;
+
+// Never let prompt vocabulary reach the user (it once said "...in the conversation or memory brief").
+const JARGON = /memory brief|the message refers to|saved history|earlier conversations below|\brule \d|this guidance|these instructions/i;
+const DATE = /\b\d{1,2}(st|nd|rd|th)? (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*,? \d{4}|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2},? \d{4}|\b\d{4}-\d{2}-\d{2}\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{4}\b/i;
+const NO_RECORD = /no record|(don'?t|do not) have (a |any )?record|no saved|nothing saved|no (earlier|previous|prior) conversation/i;
+const CANT_FIND = /(couldn'?t|could not|unable to|can'?t) (find|confirm|verify)|not (publicly )?(listed|published)|no (public|current) pric/i;
+const TOOLS = ["HubSpot", "Pipedrive", "Zoho", "Close", "Freshsales"];
 
 interface Scenario {
   name: string;
@@ -19,6 +47,7 @@ interface Scenario {
   mustNotMatch?: RegExp[];
   maxMs?: number;
   awaitSummary?: boolean; // wait for the background summary (to assert on stored claims)
+  search?: FakeSearch; // replace Tavily for this scenario (0 credits)
   check?: (r: TurnResult) => string[]; // extra assertions; return problems (empty = pass)
 }
 
@@ -141,14 +170,109 @@ const scenarios: Scenario[] = [
     mustMatch: [/(neon|supabase)/i, /\[\d+\]/],
     check: tallyCheck(2),
   },
+  // ---- Cold start: EMPTY history, the grader's own prompts verbatim (fresh instance is the common case) ----
   {
-    name: "missing-shortlist",
+    // A1: tools not named -> one short question, invent nothing (1 search tolerated: known flash-lite habit)
+    name: "cold-shortlist-unnamed",
     seed: [],
     ask: "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?",
     mustSearch: false,
-    maxSearches: 1, // same flash-lite limitation as missing-context-ask
-    mustNotMatch: [/hubspot|pipedrive|salesforce|zoho|freshsales/i], // must not invent the 5 tools
-    mustMatch: [/(which|what|list|remind|share|tell me)/i], // should ask for the 5 tools, not invent them
+    maxSearches: 1,
+    mustNotMatch: [/hubspot|pipedrive|salesforce|zoho|freshsales|close\.com|monday\.com/i, /→|Summary:/],
+    mustMatch: [/\?/, /(which|what)/i],
+    check: (r) => (r.answer.length > 300 ? [`not short: ${r.answer.length} chars`] : []),
+  },
+  {
+    // A2: tools named -> search each tool's CURRENT pricing in round one, resolve "Monday" from the clock,
+    // say plainly there is no record of Monday's prices, per-tool current price (or honest "couldn't find")
+    // with citation and source date. Natural lines: no labels, so no tally (nothing to compare against).
+    name: "cold-shortlist-named",
+    seed: [],
+    ask: "On Monday we shortlisted 5 CRM tools for a 20-person sales team: HubSpot, Pipedrive, Zoho CRM, Close, Freshsales. Has any of them changed pricing or shipped something big since?",
+    mustSearch: true,
+    mustMatch: [NO_RECORD, /\b9(th)? nov(ember)?\b|\bnov(ember)? 9\b/i],
+    mustNotMatch: [/Summary:/],
+    check: (r) => {
+      const p: string[] = [];
+      const first = r.searches.slice(0, r.searchesPerRound[0] ?? 0).map((s) => s.query).join(" | ");
+      const missing = TOOLS.filter((t) => !new RegExp(t, "i").test(first));
+      if (missing.length) p.push(`round 1 did not search: ${missing.join(", ")} (round 1: ${first})`);
+      for (const t of TOOLS) {
+        // the tool's own line: mentions it, and not 3+ other tools (skips an intro that lists all five)
+        const line = r.answer.split("\n").find((l) => new RegExp(`\\b${t}\\b`, "i").test(l) && TOOLS.filter((o) => new RegExp(`\\b${o}\\b`, "i").test(l)).length < 3) ?? "";
+        if (!line) p.push(`${t}: no line of its own`);
+        else if (/\$\s?\d/.test(line)) {
+          if (!/\[\d+\]/.test(line)) p.push(`${t}: price without citation`);
+          if (!DATE.test(line)) p.push(`${t}: price without a date`);
+        } else if (!CANT_FIND.test(line)) p.push(`${t}: neither a current price nor an honest "couldn't find"`);
+      }
+      return p;
+    },
+  },
+  {
+    // A3: date asked, nothing saved -> "no record", short, no search, nothing invented
+    name: "cold-recall-date-still-correct",
+    seed: [],
+    ask: "What did I ask you on 3 November? Is your answer still correct today?",
+    mustSearch: false,
+    mustMatch: [NO_RECORD],
+    mustNotMatch: [/postgres|supabase|neon|\$\d/i],
+    check: (r) => (r.answer.length > 300 ? [`not short: ${r.answer.length} chars`] : []),
+  },
+  {
+    // A4: no record, but the topic is named -> say so in the FIRST sentence, then answer the answerable part
+    // (current pricing) with citations and dates; never claim to remember. Structure only, no vendor names.
+    name: "cold-postgres-no-record",
+    seed: [],
+    ask: "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?",
+    mustSearch: true,
+    mustMatch: [/\[\d+\]/, DATE],
+    mustNotMatch: [/as I (said|mentioned)|I (told|recommended|suggested) you|last time I|when we (spoke|talked)|you asked me about [^.]* and I/i],
+    check: (r) => {
+      const p: string[] = [];
+      const first = r.answer.trim().split(/(?<=[.!?])\s+/)[0];
+      if (!NO_RECORD.test(first)) p.push(`first sentence does not say "no record": "${first}"`);
+      // the answerable part must actually be answered: today's prices, cited (it once listed only "could not confirm")
+      const priced = r.answer.split("\n").filter((l) => /\$\s?\d/.test(l) && /\[\d+\]/.test(l)).length;
+      if (priced < 2) p.push(`only ${priced} lines with a cited current price (need ≥2)`);
+      // "last Tuesday" from Sat 14 Nov is 10 Nov; it once wrote "last Tuesday, 3 November"
+      const named = r.answer.match(/\b(\d{1,2}) nov(ember)?\b/i)?.[1];
+      if (named && named !== "10") p.push(`wrong date for "last Tuesday": ${named} November`);
+      return p;
+    },
+  },
+  // ---- Step 8: correctness with controlled search (fake Tavily, 0 credits) ----
+  {
+    // every search fails -> the model hedges, no citations survive, and code appends the fixed note
+    name: "s8-all-searches-failed",
+    seed: [],
+    search: { fail: true },
+    ask: "What does Supabase Pro cost per month right now?",
+    mustSearch: true,
+    mustMatch: [/Web search failed for this answer/],
+    mustNotMatch: [/\[\d+\]/],
+    check: (r) => {
+      const own = r.answer.split("_(Web search failed")[0]; // the model's own words, before our note
+      return CANT_FIND.test(own) || /(couldn'?t|could not|unable to|can'?t) (access|reach|search|check|retrieve)/i.test(own)
+        ? [] : [`model's own text does not admit it could not verify: "${own.trim().slice(0, 160)}"`];
+    },
+  },
+  {
+    // two official-looking pages disagree -> say so, and go with the newer. "Velmora DB" is a made-up fixture.
+    name: "s8-conflicting-sources",
+    seed: [],
+    search: {
+      results: [
+        // a genuine conflict: two current official pages, two days apart, different prices
+        { title: "Velmora DB Pricing", url: "https://velmora.example/pricing", content: "Velmora DB Pro plan: $29 per month, billed monthly.", published_date: "2026-11-12" },
+        { title: "Velmora DB Docs: Plans and limits", url: "https://docs.velmora.example/plans", content: "Pro plan: $24 per month. Includes 50 GB storage.", published_date: "2026-11-10" },
+      ],
+    },
+    ask: "How much is Velmora DB Pro per month?",
+    mustSearch: true,
+    mustMatch: [/\$29/, /\$24/, /\[\d+\]/], // both values named, newer ($29) present
+    check: (r) =>
+      /(disagree|conflict|differ|inconsisten|while|but|however|whereas)/i.test(r.answer) ? [] : ["disagreement not stated"],
   },
   {
     // Fix 3: the background summary must actually store dated claims (it used to die on free-tier 503s,
@@ -213,9 +337,14 @@ for (const s of scenarios.filter((s) => !only || s.name.includes(only))) {
   await sleep(delayMs);
   resetDb(":memory:");
   for (const t of s.seed) saveTurn({ userId: "eval", ts: new Date(t.at).getTime(), tz, userText: t.user, answerText: t.answer, summary: `${t.user} -> ${t.answer}`, claims: t.claims ?? [] });
+  if (s.search) {
+    fake = s.search;
+    process.env.TAVILY_BASE_URL = fakeUrl; // read per call by search.ts
+  } else delete process.env.TAVILY_BASE_URL;
   const r = await runTurn({ userId: "eval", message: s.ask, time: makeTimeCtx({ tz, fakeNow: NOW }), awaitSummary: !!s.awaitSummary });
 
   const problems: string[] = [];
+  if (JARGON.test(r.answer)) problems.push(`prompt wording reached the user: "${r.answer.match(JARGON)?.[0]}"`);
   if (s.mustSearch && !r.searches.length) problems.push("expected a web search");
   if (!s.mustSearch && r.searches.length > (s.maxSearches ?? 0)) problems.push(`unexpected search: ${r.searches.map((x) => x.query).join(", ")}`);
   for (const re of s.mustMatch ?? []) if (!re.test(r.answer)) problems.push(`answer missing ${re}`);
@@ -239,4 +368,5 @@ for (const s of scenarios.filter((s) => !only || s.name.includes(only))) {
   } else if (!ok) console.log("    answer: " + r.answer.slice(0, 400).replace(/\n/g, " "));
 }
 console.log(failed ? `\n${failed} scenario(s) failed` : "\nall scenarios passed");
+fakeTavily.close();
 process.exit(failed ? 1 : 0);

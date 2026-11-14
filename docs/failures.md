@@ -24,6 +24,11 @@ Model `gemini-3.5-flash-lite`, summary `gemini-3.1-flash-lite`, Tavily basic. Or
 8. **KNOWN FLAKY**: `missing-context-ask` with unrelated history containing a nameable item: about half the runs ask correctly; others treat the unrelated name as the shortlist or quote the prompt. Regression from the tally template was found and reverted; see decisions.md.
 9. **FIXED**: `THINKING_BUDGET=0` (as the old docs suggested) returns 400 on gemini-3.5-flash-lite. Docs now say leave it empty.
 
+## Cold start (empty history, grader prompts), 2026-11-14
+10. **OPEN: no-record lead is unreliable.** `cold-shortlist-named`: lists current prices/news per tool but never says it has no record of Monday or names 9 Nov (3/3 runs). `cold-postgres-no-record`: once "I have no record of our conversation last Tuesday, 3 November 2026" (wrong date, it is 10 Nov) followed by price-less "could not confirm" lines; once stopped after the no-record sentence. Three wording attempts.
+11. **FIXED (wording)**: with no history the model fabricated "then" values in the re-check format. Re-check section now applies only with the earlier answer in view.
+12. **FIXED/TESTED**: dead `[n]` citations stripped (code); all-searches-failed note (code); conflicting sources named (prompt, fake-search scenario).
+
 ## Worked well (keep)
 - Recall by date, with the exact question and answer, in 1.2 s, no search.
 - "No record" for a date with no turns; no invented conversation.
