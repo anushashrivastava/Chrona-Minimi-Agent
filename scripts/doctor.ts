@@ -9,6 +9,7 @@ const bad = (m: string) => {
   failed = true;
 };
 let failed = false;
+const warn = (m: string) => console.log("! " + m); // degraded but working (e.g. a dead fallback)
 
 const geminiKey = process.env.GEMINI_API_KEY;
 const tavilyKey = process.env.TAVILY_API_KEY;
@@ -27,12 +28,16 @@ if (geminiKey) {
       names.includes(id)
         ? ok(`${label}=${id} exists for your key`)
         : bad(`${label}=${id} not found. Pick one of: ${names.filter((n) => /flash/.test(n)).slice(0, 12).join(", ")}`);
+    console.log(`  MODEL_FALLBACKS=${config.modelFallbacks.join(",") || "(none)"}  (tried in order on 404/403/503)`);
+    for (const id of config.modelFallbacks)
+      names.includes(id) ? ok(`fallback ${id} exists for your key`) : warn(`fallback ${id} not found: it will be skipped`);
   } catch (e) {
     bad("Gemini model list failed: " + (e as Error).message.slice(0, 200));
   }
   // Call BOTH models: being listed is not enough (some listed models reject new users, and one hung).
   // The 30 s abort turns a silent hang into a clear failure.
-  for (const id of new Set([config.model, config.fastModel])) {
+  const primaries = new Set([config.model, config.fastModel]);
+  for (const id of new Set([...primaries, ...config.modelFallbacks])) {
     const t = Date.now();
     try {
       const r = await ai.models.generateContent({
@@ -42,7 +47,7 @@ if (geminiKey) {
       });
       ok(`${id} answered "${(r.text ?? "").trim().slice(0, 20)}" in ${Date.now() - t} ms`);
     } catch (e) {
-      bad(`${id} call failed after ${Date.now() - t} ms: ${(e as Error).message.slice(0, 200)} (a 429 here means free-tier quota for this model; try another one)`);
+      (primaries.has(id) ? bad : warn)(`${id} call failed after ${Date.now() - t} ms: ${(e as Error).message.slice(0, 200)} (a 429 here means free-tier quota for this model; try another one)`);
     }
   }
 }

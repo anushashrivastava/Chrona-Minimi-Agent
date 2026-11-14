@@ -8,6 +8,10 @@ import type { AddressInfo } from "node:net";
 
 const seen: any[] = []; // every request body the mock Gemini received
 let failNext429 = 0;
+// model -> { status, times } : make a specific model fail (times = Infinity for "retired")
+const failModel = new Map<string, { status: number; times: number }>();
+const calls: { kind: "stream" | "summary"; model: string }[] = []; // which model served each request
+const errBody: Record<number, string> = { 404: "NOT_FOUND", 429: "RESOURCE_EXHAUSTED", 503: "UNAVAILABLE" };
 
 function readBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((res) => {
@@ -22,6 +26,14 @@ const cand = (parts: any[], finishReason?: string) => ({ candidates: [{ content:
 const mockGemini = http.createServer(async (req, res) => {
   const body = await readBody(req);
   const url = req.url ?? "";
+  const model = url.match(/models\/([^:]+):/)?.[1] ?? "?";
+  calls.push({ kind: url.includes("streamGenerateContent") ? "stream" : "summary", model });
+  const f = failModel.get(model);
+  if (f && f.times > 0) {
+    f.times--;
+    res.writeHead(f.status, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: { code: f.status, status: errBody[f.status], message: `mock ${f.status}` } }));
+  }
   if (failNext429 > 0 && url.includes("streamGenerateContent")) {
     failNext429--;
     res.writeHead(429, { "content-type": "application/json" });
@@ -64,6 +76,9 @@ process.env.TAVILY_BASE_URL = `http://127.0.0.1:${tp}`;
 process.env.GEMINI_API_KEY = "test";
 process.env.TAVILY_API_KEY = "test";
 process.env.ALLOW_FAKE_NOW = "1";
+process.env.MODEL = "primary-model";
+process.env.FAST_MODEL = "fast-model";
+process.env.MODEL_FALLBACKS = "backup-model";
 
 const { runTurn } = await import("../src/agent.js");
 const { resetDb, allTurns } = await import("../src/memory.js");
@@ -110,6 +125,34 @@ assert.equal(allTurns("u").length, n);
 failNext429 = 1;
 const r4 = await runTurn({ userId: "u", message: "hello again", time });
 assert.match(r4.answer, /welcome/i);
+
+// 5. MODEL_FALLBACKS: a 503 on the primary falls through to the backup, and the turn stays on it
+calls.length = 0;
+failModel.set("primary-model", { status: 503, times: 1 });
+const r5 = await runTurn({ userId: "u", message: "What's the latest Node LTS?", time });
+assert.match(r5.answer, /Node 24/);
+assert.deepEqual(calls.filter((c) => c.kind === "stream").map((c) => c.model), ["primary-model", "backup-model", "backup-model"]);
+
+// 6. summary: a 429 is retried on the same model (backoff), and claims still get stored
+calls.length = 0;
+failModel.set("fast-model", { status: 429, times: 1 });
+const r6 = await runTurn({ userId: "u", message: "thanks again", time, awaitSummary: true });
+assert.deepEqual(calls.filter((c) => c.kind === "summary").map((c) => c.model), ["fast-model", "fast-model"]);
+assert.match(allTurns("u").find((t) => t.id === r6.turnId)?.claims_json ?? "", /Latest Node LTS/);
+
+// 7. summary: a 503 falls back to the next model instead of waiting
+calls.length = 0;
+failModel.set("fast-model", { status: 503, times: 1 });
+const r7 = await runTurn({ userId: "u", message: "cheers", time, awaitSummary: true });
+assert.deepEqual(calls.filter((c) => c.kind === "summary").map((c) => c.model), ["fast-model", "backup-model"]); // chain = FAST_MODEL, then MODEL_FALLBACKS
+assert.ok(allTurns("u").find((t) => t.id === r7.turnId)?.claims_json);
+
+// 8. a retired (404) model is skipped on later turns, not re-tried every time (keep last: it is sticky)
+calls.length = 0;
+failModel.set("primary-model", { status: 404, times: Infinity });
+await runTurn({ userId: "u", message: "hi", time });
+await runTurn({ userId: "u", message: "hi again", time });
+assert.deepEqual(calls.filter((c) => c.kind === "stream").map((c) => c.model), ["primary-model", "backup-model", "backup-model"]);
 
 mockGemini.close();
 mockTavily.close();

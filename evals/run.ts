@@ -2,7 +2,7 @@
 // checks the answers with cheap assertions, and reports latency.
 // Run: npm run eval        (optionally: npm run eval -- still). EVAL_DELAY_MS paces calls for free-tier limits.
 import { runTurn, type TurnResult } from "../src/agent.js";
-import { resetDb, saveTurn, type Claim } from "../src/memory.js";
+import { allTurns, resetDb, saveTurn, type Claim } from "../src/memory.js";
 import { makeTimeCtx } from "../src/time.js";
 
 process.env.ALLOW_FAKE_NOW = "1";
@@ -18,6 +18,7 @@ interface Scenario {
   mustMatch?: RegExp[]; // all must match the answer
   mustNotMatch?: RegExp[];
   maxMs?: number;
+  awaitSummary?: boolean; // wait for the background summary (to assert on stored claims)
   check?: (r: TurnResult) => string[]; // extra assertions; return problems (empty = pass)
 }
 
@@ -137,6 +138,23 @@ const scenarios: Scenario[] = [
     mustMatch: [/(which|what|list|remind|share|tell me)/i], // should ask for the 5 tools, not invent them
   },
   {
+    // Fix 3: the background summary must actually store dated claims (it used to die on free-tier 503s,
+    // leaving nothing for a later "is it still correct?"). Retries + MODEL_FALLBACKS make it survive.
+    name: "summary-claims-stored",
+    seed: [],
+    ask: "How much does Supabase Pro cost per month?",
+    mustSearch: true,
+    awaitSummary: true,
+    mustMatch: [/\$\d+/, /\[\d+\]/],
+    check: (r) => {
+      const row = allTurns("eval").find((t) => t.id === r.turnId);
+      const claims: Claim[] = row?.claims_json ? JSON.parse(row.claims_json) : [];
+      if (!row?.summary) return ["no summary stored"];
+      if (!claims.length) return ["summary stored but no claims"];
+      return claims.every((c) => c.asOf === "2026-11-14") ? [] : [`claims not dated with the turn date: ${row.claims_json}`];
+    },
+  },
+  {
     name: "fresh-fact",
     seed: [],
     ask: "What's the latest stable version of Node.js?",
@@ -161,7 +179,7 @@ for (const s of scenarios.filter((s) => !only || s.name.includes(only))) {
   await sleep(delayMs);
   resetDb(":memory:");
   for (const t of s.seed) saveTurn({ userId: "eval", ts: new Date(t.at).getTime(), tz, userText: t.user, answerText: t.answer, summary: `${t.user} -> ${t.answer}`, claims: t.claims ?? [] });
-  const r = await runTurn({ userId: "eval", message: s.ask, time: makeTimeCtx({ tz, fakeNow: NOW }), awaitSummary: false });
+  const r = await runTurn({ userId: "eval", message: s.ask, time: makeTimeCtx({ tz, fakeNow: NOW }), awaitSummary: !!s.awaitSummary });
 
   const problems: string[] = [];
   if (s.mustSearch && !r.searches.length) problems.push("expected a web search");

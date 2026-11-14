@@ -20,6 +20,7 @@ import {
   type SourceRef,
 } from "./memory.js";
 import { dynamicPrompt, STABLE_PROMPT, SUMMARY_PROMPT } from "./prompt.js";
+import { withModelFallback } from "./models.js";
 import { runSearch, searchTool, SourceRegistry, type SearchInput } from "./search.js";
 import { describeInstant, localDate, type TimeCtx } from "./time.js";
 
@@ -54,15 +55,6 @@ const gemini = () =>
     ...(process.env.GEMINI_BASE_URL ? { httpOptions: { baseUrl: process.env.GEMINI_BASE_URL } } : {}),
   }));
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Free-tier keys hit 429s; a short backoff usually clears it. Only safe before any text was streamed. */
-function isRetryable(e: unknown): boolean {
-  const status = (e as { status?: number })?.status;
-  const msg = String((e as Error)?.message ?? e);
-  return [429, 500, 503].includes(status ?? 0) || /RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded/i.test(msg);
-}
-
 /** Turn provider errors into something a user can act on. */
 export function friendlyError(e: unknown): string {
   const msg = String((e as Error)?.message ?? e);
@@ -80,18 +72,23 @@ interface Round {
   finishReason?: string;
 }
 
-/** One streamed model call. Text goes to onText as it arrives; function calls are collected. */
+/**
+ * One streamed model call. Text goes to onText as it arrives; function calls are collected.
+ * Falls back / retries (see models.ts) only while no text has reached the user.
+ */
 async function streamRound(opts: {
+  model: string;
   contents: Content[];
   system: string;
   forceAnswer: boolean; // last round: forbid more tool calls
   onText: (delta: string) => void;
-}): Promise<Round> {
-  for (let attempt = 0; ; attempt++) {
-    let streamedText = false;
-    try {
+}): Promise<Round & { model: string }> {
+  let streamedText = false;
+  const { value, model } = await withModelFallback(
+    opts.model,
+    async (model) => {
       const stream = await gemini().models.generateContentStream({
-        model: config.model,
+        model,
         contents: opts.contents,
         config: {
           systemInstruction: opts.system,
@@ -127,14 +124,10 @@ async function streamRound(opts: {
       }
       const calls = parts.flatMap((p) => (p.functionCall ? [p.functionCall] : []));
       return { parts, text, calls, finishReason };
-    } catch (e) {
-      if (!streamedText && attempt < 2 && isRetryable(e)) {
-        await sleep(1500 * (attempt + 1));
-        continue;
-      }
-      throw e;
-    }
-  }
+    },
+    { label: "answer", retries: 2, baseDelayMs: 1500, canRetry: () => !streamedText },
+  );
+  return { ...value, model };
 }
 
 export async function runTurn(opts: {
@@ -168,11 +161,15 @@ export async function runTurn(opts: {
   let firstTokenMs: number | null = null;
   let answer = "";
   let rounds = 0;
+  // Starts at MODEL; if a fallback answers, later rounds stay on it: replaying one model's parts (thought
+  // signatures) to another model is asking for a 400.
+  let turnModel = config.model;
 
   for (let round = 0; round <= config.maxToolRounds; round++) {
     rounds++;
     const forceAnswer = round === config.maxToolRounds; // force an answer, no more searching
     const r = await streamRound({
+      model: turnModel,
       contents,
       system,
       forceAnswer,
@@ -182,6 +179,7 @@ export async function runTurn(opts: {
       },
     });
 
+    turnModel = r.model;
     if (!r.calls.length || forceAnswer) {
       answer = r.text;
       if (r.finishReason === "MAX_TOKENS") {
@@ -250,16 +248,23 @@ export async function runTurn(opts: {
  */
 async function summariseTurn(turnId: number, q: string, a: string, date: string) {
   try {
-    const res = await gemini().models.generateContent({
-      model: config.fastModel,
-      contents: `Turn date: ${date}\n\nUser: ${q}\n\nAssistant: ${a}`,
-      config: {
-        systemInstruction: SUMMARY_PROMPT,
-        responseMimeType: "application/json",
-        maxOutputTokens: 800,
-        temperature: 0,
-      },
-    });
+    // Background, so it can afford patience: fallbacks plus 3 backoff retries (2 s, 4 s, 8 s). Without this,
+    // free-tier 503s left half the turns with no claims, and "is it still correct?" had nothing to re-check.
+    const { value: res } = await withModelFallback(
+      config.fastModel,
+      (model) =>
+        gemini().models.generateContent({
+          model,
+          contents: `Turn date: ${date}\n\nUser: ${q}\n\nAssistant: ${a}`,
+          config: {
+            systemInstruction: SUMMARY_PROMPT,
+            responseMimeType: "application/json",
+            maxOutputTokens: 800,
+            temperature: 0,
+          },
+        }),
+      { label: "summary", retries: 3, baseDelayMs: 2000 },
+    );
     const json = (res.text ?? "").match(/\{[\s\S]*\}/)?.[0];
     if (!json) throw new Error("summary model returned no JSON");
     const parsed = JSON.parse(json) as { summary?: string; claims?: Claim[] };

@@ -7,6 +7,12 @@ export const config = {
   port: Number(process.env.PORT ?? 3000),
   model: process.env.MODEL ?? "gemini-3.5-flash-lite",
   fastModel: process.env.FAST_MODEL ?? "gemini-3.1-flash-lite",
+  // Tried in order when a model returns 404/403 (retired for this key) or 503 (overloaded). Empty = none.
+  // Default: each lite model backs up the other (the chain skips whichever is already primary).
+  modelFallbacks: (process.env.MODEL_FALLBACKS ?? "gemini-3.1-flash-lite,gemini-3.5-flash-lite")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   thinkingBudget: budget ? Number(budget) : undefined, // undefined = model default
   dbPath: process.env.DB_PATH ?? "data/agent.db",
   defaultTz: process.env.DEFAULT_TZ ?? "UTC",
