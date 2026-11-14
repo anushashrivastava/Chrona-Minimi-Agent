@@ -1,28 +1,36 @@
-# DESIGN.md (DRAFT: replace the TODOs with real numbers before submitting)
-
-## What it is
-A chat agent with one tool (web search) and time-aware memory. It answers fast, grounds claims in cited sources, and can answer "what did I ask on 3 November, and is that still true?"
+# DESIGN.md
 
 ## How it works
 ```
-message → context builder (no LLM): clock + timezone, chrono date parsing, SQLite/FTS5 recall → memory brief
-        → model (streamed) + web_search, parallel searches, max 4 rounds
-        → answer with [n] citations → saved to SQLite
-        → background: fast model writes a summary + dated claims for later re-checking
+message → code, no model call: clock + timezone, date parsing (chrono), SQLite/FTS5 recall by date and keyword
+        → Gemini, streamed, ONE tool (web_search via Tavily), parallel searches, max 2 search rounds
+        → code: citations renumbered, tally, "no record" line → saved → background summary stores dated claims
 ```
-- **Time**: the model is told the exact current date/time/timezone every turn. Relative dates ("last Tuesday") are resolved in code, not by the model.
-- **Memory**: every turn stored with UTC timestamp, the user's local date, answer, sources, summary, claims. Recall = turns on referenced dates + BM25 keyword matches. Recent turns also go in verbatim.
-- **"Still correct?"**: the old turn's claims are in the prompt; the model re-searches each with `since=<old date>` and answers *What changed / Unchanged / Could not confirm*.
+Memory and the clock are plumbing, not tools; each turn stores the user's local date.
 
-## Why this design
-- **Memory is plumbing, not a tool.** The brief gives one tool. A memory tool would also cost a model round trip and could be skipped or misused. Building the brief deterministically is faster and testable offline.
-- **Fast**: streaming, visible search status, parallel searches, trimmed results, a stable prompt prefix, summaries off the critical path (on a separate fast model). TODO: measured numbers (first token / total, with and without search).
-- **Right**: citations only to sources the model saw, dates on time-sensitive facts, explicit "could not verify" instead of guessing, ask when memory is ambiguous.
-- **Tested**: `check:memory` and `check:loop` (offline, mock servers) and `npm run eval` (live, fake clock). TODO: pass rate.
-- **Zero-friction install**: built-in `node:sqlite` (no native build) and free-tier keys, so `npm install && npm run dev` works on a clean machine.
+## Why built this way (what the evals taught)
+- **Absence of new pages is not evidence of no change.** Searching only for pages published since the old date, it read "nothing new" as "unchanged"; pricing pages are rarely republished. It now looks up current values; **Could not confirm** is the default.
+- **With no history, the model invented a past** ("HubSpot: then $20 → now $20 — Unchanged"). The re-check instructions are now sent only when an earlier answer is in view.
+- **Derived values belong in code, not in the model's output.** Written first, the model's verdict was a guess; written last, it miscounted its own labels. Code now counts the labels, states "I have no record of a conversation with you on Tuesday, 10 November 2026" (three rewordings never managed it reliably), numbers citations by first appearance, and drops `[n]` that point nowhere.
+- **Tavily returns stale page snapshots that disagree.** Two nodejs.org pages, indexed five weeks apart, gave different "latest" versions, so facts are dated by their source.
+- **A prompt template attracts misuse.** A fill-in line for "no current value" got copied onto an unrelated name, so I parse what the model writes instead.
+- **Free-tier models differ per key.** For a new key, `2.5-flash` returned 404, `3.5-flash` took 27 s, `3.8-flash` returned 503; calls walk a fallback chain that `npm run doctor` tests.
+
+**Speed** (medians of 3 full runs): 1.2 s with no search, 4.0 s with one search round, 6.5 s with two or more. Of 25 turns that searched, 14 used 1 round, 10 used 2, and 1 used 4 (21.8 s), so the cap is 2. Thinking made no difference: the model's default already uses 0 thinking tokens.
+
+**Tested:** offline checks (dates, recall, the loop against mock servers) and 18 live scenarios at a fixed clock, judged by reading the answers.
 
 ## Considered and rejected
-Vector DB (exact date/keyword lookups don't need it) · agent frameworks (opaque, slower, harder to explain) · planner/critic multi-agent (latency) · full history in the prompt (cost, noise) · a memory tool (breaks the one-tool brief) · letting the LLM parse dates (slower, error-prone).
+A memory tool (breaks the one-tool brief) · a vector database (lookups are exact) · agent frameworks (opaque) · model-parsed dates (can be wrong) · classifier or verifier calls (an extra request every turn) · comparing prices in code (ranges, billing variants) · stronger models (27 s or more).
+**Trade-off:** in re-check answers the summary comes last, against my "lead with the conclusion" rule. Correctness won.
+
+## Known limits (docs/failures.md)
+- **A4, "Last Tuesday I asked about Postgres hosting" with no history:** cited current prices in 2 of 3 runs; one said a price "remains".
+- **A2, "we shortlisted these 5 tools" with no history:** doesn't say it lacks Monday's figures.
+- **A list never given, next to unrelated history:** asks which list about half the time, after one wasted search (9 runs, 3 fixes tried).
 
 ## With another week
-Hybrid retrieval (embeddings + FTS) · claim-by-claim diffing with stored source snapshots · a larger eval set with an LLM judge · scheduled re-checks ("tell me if this price changes"), which is exactly the proactive-nudge shape minimi is built on.
+- **Scheduled re-checks** ("tell me if this price changes"): minimi's proactive-nudge shape, built on the stored dated claims.
+- **Embeddings alongside FTS:** keyword search misses paraphrased topics.
+- **Stored source snapshots** to compare claims against.
+- **A bigger eval set with repeated runs:** 3 runs is too few to rank prompt changes.
