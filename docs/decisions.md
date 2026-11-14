@@ -104,3 +104,13 @@ Graders will mostly chat with a fresh instance, so the common path is "I asked y
 - **The injected history section states facts only**: "No conversation is saved for Monday, 9 November 2026." instead of "There are NO saved turns on that date. Say so plainly; do not guess." The old line was an instruction in a reply-like voice (echo risk), and "do not guess" plausibly discouraged answering the part of a question that IS answerable. Behaviour rules live only in the stable prompt. `check:memory` asserts the brief contains no "say so / do not guess / plainly".
 - **Dates spelled out in code** (`describeDate`, formatted at UTC noon so no timezone shifts the calendar day): the model no longer has to derive the weekday of `2026-11-09`.
 - **New decision rule 3**: no record of the conversation, but the question is answerable on its own (topic named, items listed) → one sentence "no record", then answer the current part with search; never pretend to remember. Rule 2 now says that "is that answer still correct?" with no record has nothing to check. Rule 1 narrowed to unnamed specific items ("the 5 tools we shortlisted"). *Rejected*: a classifier call to route cold-start messages (extra request on every turn).
+
+## Step 8: correctness checks, code where the fact is known in code (commit 2 of 3)
+Same principle as the tally: if code KNOWS something about the answer, code enforces it; the prompt handles judgement.
+| failure mode | before | now |
+|---|---|---|
+| `[n]` with no matching source | partly: chips only listed real sources, but a dead `[7]` stayed in the text and was saved | **code**: after the stream, any `[n]` this turn's searches did not return is stripped; if anything changed, the cleaned text is resent with the existing `reset` event (rare, no UI change) and saved cleaned. Covers numbers re-cited from older turns too. `check:loop` 4c |
+| all searches failed, answer sounds certain | prompt rule + tool error text only | **code**: when every search in the turn failed, a fixed note is appended ("Web search failed for this answer, so none of it could be checked against sources."); its citations are already stripped (no sources). `check:loop` 4d + live scenario |
+| time-sensitive claim with no date | prompt rule (date by source) | **prompt only**, deliberately: code cannot tell which claims are time-sensitive without another model call. Live scenarios assert a date appears in search-backed answers |
+| two sources conflict | prompt rule (say so, take the newer) | **prompt only** (judgement). Live scenario with a fake search server returning two conflicting official-looking pages |
+*Rejected*: a verifier model call per answer (latency + free-tier quota on every turn).

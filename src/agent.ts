@@ -161,6 +161,7 @@ export async function runTurn(opts: {
   const registry = new SourceRegistry();
   const searches: SearchInput[] = [];
   const searchesPerRound: number[] = [];
+  let failedSearches = 0;
   let firstTokenMs: number | null = null;
   let answer = "";
   let rounds = 0;
@@ -202,6 +203,7 @@ export async function runTurn(opts: {
 
     // Parallel: N searches cost about the latency of one.
     const results = await Promise.all(inputs.map((i) => runSearch(i, registry)));
+    failedSearches += results.filter((x) => x.isError).length;
     contents.push({
       role: "user",
       parts: r.calls.map((c, i) => ({
@@ -212,6 +214,18 @@ export async function runTurn(opts: {
         },
       })),
     });
+  }
+
+  // A citation must point at a source this turn actually saw. The model can cite a number it never got
+  // (or one from an earlier turn in the transcript); a dead [n] looks like evidence and is not. Strip it.
+  // Rare, so when it happens we resend the cleaned text with the existing `reset` event rather than
+  // complicating the stream; the saved answer is the cleaned one.
+  const known = new Set(registry.list().map((s) => s.n));
+  const cleaned = answer.replace(/\s*\[(\d+)\]/g, (m, n) => (known.has(Number(n)) ? m : ""));
+  if (cleaned !== answer) {
+    answer = cleaned;
+    emit({ type: "reset" });
+    emit({ type: "text", delta: answer });
   }
 
   // Empty answer (safety block, refusal, cut-off before any text): never save it. A saved empty
@@ -228,6 +242,14 @@ export async function runTurn(opts: {
   const summary = summaryLine(answer);
   if (summary) {
     const delta = `\n\n${summary}`;
+    answer += delta;
+    emit({ type: "text", delta });
+  }
+
+  // Every search failed: whatever the answer says, nothing in it was checked. That is a fact we know in
+  // code, so code states it (the prompt asks the model to say so too, but it can sound certain anyway).
+  if (searches.length && failedSearches === searches.length) {
+    const delta = "\n\n_(Web search failed for this answer, so none of it could be checked against sources.)_";
     answer += delta;
     emit({ type: "text", delta });
   }

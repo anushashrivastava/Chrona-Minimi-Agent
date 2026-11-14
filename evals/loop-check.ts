@@ -48,11 +48,14 @@ const mockGemini = http.createServer(async (req, res) => {
   const last = body.contents.at(-1);
   const lastText: string = last.parts.map((p: any) => p.text ?? "").join("");
   res.writeHead(200, { "content-type": "text/event-stream" });
+  const firstUser: string = body.contents.findLast((c: any) => c.role === "user" && c.parts.some((p: any) => p.text))?.parts[0].text ?? "";
   if (last.parts.some((p: any) => p.functionResponse)) {
     res.write(sse(cand([{ text: "Node 24 is the current LTS " }])));
-    res.write(sse(cand([{ text: "[1]." }], "STOP")));
+    // "bogus": cite a source number the search never returned ([7]) next to a real one
+    res.write(sse(cand([{ text: /bogus/i.test(firstUser) ? "[1][7], per a guide [9]." : "[1]." }], "STOP")));
   } else if (/latest/i.test(lastText)) {
-    res.write(sse(cand([{ functionCall: { id: "c1", name: "web_search", args: { query: "latest node lts" } } }, { functionCall: { id: "c2", name: "web_search", args: { query: "node release schedule", since: "2026-01-01" } } }], "STOP")));
+    const q = /fail/i.test(lastText) ? "latest node lts (fail)" : "latest node lts"; // distinct query: bypass the search cache
+    res.write(sse(cand([{ functionCall: { id: "c1", name: "web_search", args: { query: q } } }, { functionCall: { id: "c2", name: "web_search", args: { query: `${q} schedule`, since: "2026-01-01" } } }], "STOP")));
   } else if (/still correct/i.test(lastText)) {
     // a re-check answer: labelled item lines, no tally (the server must compute it)
     res.write(sse(cand([{ text: "- Neon: then $19 → now $19 [1] — Unchanged\n" }])));
@@ -66,8 +69,13 @@ const mockGemini = http.createServer(async (req, res) => {
 });
 
 let tavilyBodies: any[] = [];
+let tavilyDown = false; // simulate every search failing
 const mockTavily = http.createServer(async (req, res) => {
   tavilyBodies.push(await readBody(req));
+  if (tavilyDown) {
+    res.writeHead(500, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: "down" }));
+  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ results: [{ title: "Node.js releases", url: "https://nodejs.org/en/about/previous-releases", content: "Node 24 is Active LTS.", published_date: "2026-10-01" }] }));
 });
@@ -142,6 +150,23 @@ const { itemLabels, summaryLine } = await import("../src/verdict.js");
 assert.deepEqual(itemLabels("A: then 1 → now 2 — Unchanged\nB: then 1 → now 2 – **changed**\nper-user pricing changed a lot"), ["unchanged", "changed"]);
 assert.equal(summaryLine("No comparison lines here — changed"), null); // no "→": not a label line
 assert.deepEqual(itemLabels("* Quorvex CRM pricing: Could not confirm (no source)\nThe answer could not confirm it."), ["could not confirm"]);
+
+// 4c. a cited [n] with no matching source is stripped: resent via reset + cleaned text, and saved cleaned
+const ev4c: { type: string; delta?: string }[] = [];
+const r4c = await runTurn({ userId: "u", message: "latest Node? (bogus cites)", time, onEvent: (e) => ev4c.push(e as any) });
+assert.equal(r4c.answer, "Node 24 is the current LTS [1], per a guide.");
+const lastReset = ev4c.map((e) => e.type).lastIndexOf("reset");
+assert.ok(lastReset > 0 && ev4c[lastReset + 1]?.delta === r4c.answer, "cleaned text resent after reset");
+assert.equal(allTurns("u").find((t) => t.id === r4c.turnId)?.answer_text, r4c.answer);
+assert.deepEqual(r4c.sources.map((s) => s.n), [1]);
+
+// 4d. every search failed: no citations survive, and code appends a fixed "could not be checked" note
+tavilyDown = true;
+const r4d = await runTurn({ userId: "u", message: "latest Node? (fail)", time });
+tavilyDown = false;
+assert.doesNotMatch(r4d.answer, /\[\d+\]/);
+assert.match(r4d.answer, /Web search failed for this answer, so none of it could be checked against sources\./);
+assert.doesNotMatch(r1.answer, /Web search failed/); // only when ALL searches failed
 
 // 5. MODEL_FALLBACKS: a 503 on the primary falls through to the backup, and the turn stays on it
 calls.length = 0;
