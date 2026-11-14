@@ -1,0 +1,31 @@
+# Decision log
+Append new entries as you go. Format: **Decision**: why. *Rejected*: alternatives.
+
+- **Memory is plumbing, not a tool**: the brief says one tool (web search). A memory tool would also add a model round trip and a decision the model can get wrong. We build the memory brief before the model call, deterministically. *Rejected*: `recall_memory` tool.
+- **SQLite + FTS5 + stored local date, no vector DB**: the target questions are by date or by topic keyword; both are exact lookups. Zero extra services, instant, explainable. *Rejected*: embeddings (revisit with more time for fuzzy topic recall).
+- **Store `local_date` per turn in the user's timezone at write time**: "3 November" must mean the user's 3 November, not UTC's. *Rejected*: computing day windows at query time (tz edge cases when the user travels).
+- **Date parsing with chrono-node, not the LLM**: deterministic, free, ~0 ms. Bare weekdays and dates without a year roll back into the past because users refer to earlier conversations. *Rejected*: asking the model to resolve dates (slower, can be wrong).
+- **Claims ledger written by a fast model after the reply**: gives "is it still correct?" something concrete to re-check, and costs the user zero latency. *Rejected*: summarising before replying (adds seconds).
+- **Plain tool loop on the Gemini SDK (`@google/genai`), no framework**: fewer layers, easy to explain and measure. *Rejected*: LangChain / Vercel AI SDK agents; the SDK's automatic function calling (we need parallel calls, a round cap and status events, so we run the loop ourselves).
+- **Parallel searches, capped at 4 rounds, final round forces an answer**: bounds latency and cost, avoids search spirals.
+- **Stable prompt first, dynamic prompt (date, memory) after**: any provider-side prompt caching keys on an identical prefix, so the per-turn parts go last. We do not use explicit cache controls. *Rejected*: putting the date at the top (breaks the shared prefix).
+- **Trim search content to ~900 chars/result and 5 results**: fewer input tokens = faster first token, and less noise for the model.
+- **Citations as [n] numbered per turn by the server**: the model can only cite numbers it actually saw; the UI maps them to real URLs.
+- **SSE streaming + visible "Searching: ..." status**: perceived speed. The user sees progress within ~1 s even when searches take a few seconds.
+
+## Gemini port and review fixes
+- **Gemini free tier instead of a paid model**: free keys (no card) for both model and search. Model IDs are env-configurable and `npm run doctor` verifies they exist for the key, because Gemini IDs and free-tier access change often. *Rejected*: hard-coding one model ID; a provider-abstraction layer (more code to defend; swapping is one file, `agent.ts`).
+- **Built-in `node:sqlite` instead of `better-sqlite3`**: better-sqlite3 needs a native binary; when the prebuilt download failed in a clean environment it fell back to compiling and `npm install` failed outright. The brief says it must run with plain `npm install`, so a native build step is a risk we don't need. Cost: Node 22.13+ (stated in README/engines) and an experimental-warning flag in scripts. FTS5 verified to work.
+- **Env flags read lazily (getters), not at import time**: `ALLOW_FAKE_NOW` was read once at import, so the eval's fake clock was silently ignored. It only looked fine because the fake date equalled the real one.
+- **Ask Tavily for `include_published_date`**: without it general searches return no dates, and "has it changed since X?" has nothing to compare. Beta; dates may be null. `filter_by_published_date` stays false so undated sources are kept.
+- **Never save an empty answer**: a blocked/refused/cut-off turn saved with empty text would be replayed into every later request and could break the chat permanently. We show a fallback message and save nothing.
+- **`maxOutputTokens` 8192 + visible notice on MAX_TOKENS**: a ceiling, not a target; truncated answers must say so rather than end mid-sentence.
+- **Log background-summary failures**: they used to fail silently, leaving no claims to re-check later. Still non-fatal to the chat.
+- **Retry 429/500/503 up to twice, only before any text streamed; friendly message on 429**: free tiers rate-limit; a short backoff usually clears it, and retrying after partial text would duplicate output.
+- **Background summary on the fast model**: separate model means a separate quota bucket and no added user latency. Note it costs one extra request per turn on the free tier.
+- **Thinking budget is opt-in (`THINKING_BUDGET`)**: thinking trades latency for accuracy; decide with measurements in Step 7, not by guess.
+- **Mock-server loop test (`check:loop`)**: proves our loop logic (parallel calls, function-response turn, citations, persistence, empty answers, retry) without keys. It cannot prove the real API accepts our payloads; `doctor` and the live eval do.
+
+
+## Step 1 fixes
+- **The memory brief reports each referenced date honestly: in memory / in the transcript above / no turns**: `recall()` drops turns already in the last-6 transcript (no duplication), but the brief then said "NO saved turns on that date. Say so plainly" whenever nothing survived, so "What did I ask you on 3 November?" with a short history got a brief that contradicted the transcript. Now "no saved turns" is only said when the date truly has none, and a date whose turns are in the transcript gets a pointer to it. Today is never reported either way, because chrono parses "is it still correct today?" as a date and that is not a memory lookup. Regression tests in `check:memory`. *Rejected*: keeping date matches even when they are in the transcript (tried it: "today" then dumped today's turns into the brief as noise, and the full answer is already in the transcript anyway).
