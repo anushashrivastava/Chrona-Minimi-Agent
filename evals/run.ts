@@ -32,10 +32,10 @@ function tallyCheck(minItems: number) {
     const p: string[] = [];
     const lines = r.answer.split("\n");
     const labels = lines
-      .filter((l) => l.includes("→"))
+      .filter((l) => l.includes("→") || /^\W*[^:]+:\W*could not confirm/i.test(l))
       .map((l) => [...l.toLowerCase().matchAll(/could not confirm|unchanged|changed/g)].at(-1)?.[0])
       .filter(Boolean) as string[];
-    if (labels.length < minItems) p.push(`expected ≥${minItems} labelled "then → now — label" lines, found ${labels.length}`);
+    if (labels.length < minItems) p.push(`expected ≥${minItems} labelled item lines, found ${labels.length}`);
     if (lines.some((l) => /\bverdict\b/i.test(l))) p.push("model wrote its own verdict line");
     const summary = lines.find((l) => l.includes("**Summary:**")) ?? "";
     const n = (l: string) => labels.filter((x) => x === l).length;
@@ -55,8 +55,10 @@ const scenarios: Scenario[] = [
     ask: "Has anything on the shortlist changed pricing?",
     mustSearch: false,
     maxSearches: 1,
-    mustMatch: [/(\?|please (share|let me know|tell))/i, /(which|what|share|list|remind)/i],
-    mustNotMatch: [/no pricing to change/i, /hubspot|pipedrive|salesforce|zoho/i],
+    mustMatch: [/(\?|please (share|let me know|tell|specify|clarify|provide))/i, /(which|what|share|list|remind)/i],
+    // no re-check format when there is nothing to re-check (it once "re-checked" the standup name)
+    mustNotMatch: [/no pricing to change/i, /hubspot|pipedrive|salesforce|zoho/i, /→/, /Summary:/, /could not confirm/i,
+      /memory brief|the message refers to/i], // it once parroted the prompt's rule text back to the user
     maxMs: 8000,
   },
   {
@@ -205,6 +207,8 @@ const only = process.argv[2];
 const delayMs = Number(process.env.EVAL_DELAY_MS ?? 4000); // free tiers have per-minute limits; pace the scenarios
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
+// EVAL_JSON=<file>: append one JSON line per scenario (timings, search shape) for latency analysis
+const jsonOut = process.env.EVAL_JSON;
 for (const s of scenarios.filter((s) => !only || s.name.includes(only))) {
   await sleep(delayMs);
   resetDb(":memory:");
@@ -220,6 +224,11 @@ for (const s of scenarios.filter((s) => !only || s.name.includes(only))) {
   if (s.maxMs && r.timings.totalMs > s.maxMs) problems.push(`too slow: ${r.timings.totalMs}ms > ${s.maxMs}ms`);
 
   const ok = problems.length === 0;
+  if (jsonOut) {
+    const { appendFileSync } = await import("node:fs");
+    const row = { at: new Date().toISOString(), name: s.name, ok, problems, firstTokenMs: r.timings.firstTokenMs, totalMs: r.timings.totalMs, rounds: r.timings.rounds, searches: r.searches.length, searchesPerRound: r.searchesPerRound, thinkingBudget: process.env.THINKING_BUDGET ?? "" };
+    appendFileSync(jsonOut, JSON.stringify(row) + "\n");
+  }
   if (!ok) failed++;
   console.log(`${ok ? "✓" : "✗"} ${s.name}  (${(r.timings.totalMs / 1000).toFixed(1)}s, first token ${r.timings.firstTokenMs ?? "-"}ms, ${r.searches.length} searches, per round [${r.searchesPerRound.join(",")}])`);
   problems.forEach((p) => console.log("    - " + p));

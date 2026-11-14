@@ -141,6 +141,7 @@ assert.doesNotMatch(r4.answer, /Summary:/); // ordinary answers get no tally
 const { itemLabels, summaryLine } = await import("../src/verdict.js");
 assert.deepEqual(itemLabels("A: then 1 → now 2 — Unchanged\nB: then 1 → now 2 – **changed**\nper-user pricing changed a lot"), ["unchanged", "changed"]);
 assert.equal(summaryLine("No comparison lines here — changed"), null); // no "→": not a label line
+assert.deepEqual(itemLabels("* Quorvex CRM pricing: Could not confirm (no source)\nThe answer could not confirm it."), ["could not confirm"]);
 
 // 5. MODEL_FALLBACKS: a 503 on the primary falls through to the backup, and the turn stays on it
 calls.length = 0;

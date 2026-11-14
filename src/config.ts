@@ -20,7 +20,7 @@ export const config = {
   get allowFakeNow() {
     return process.env.ALLOW_FAKE_NOW === "1";
   },
-  maxToolRounds: 4, // hard cap on search rounds per turn: bounds latency and cost
+  maxToolRounds: 2, // search rounds per turn, then a forced answer. Measured: 24/25 turns used <=2; the one 4-round turn took 21.8 s
   maxOutputTokens: 8192, // ceiling only; normal answers are far shorter
   maxSearchResults: 5,
   maxCharsPerResult: 900, // trim page content before it reaches the model (speed + focus)
