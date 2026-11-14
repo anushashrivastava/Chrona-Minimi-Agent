@@ -22,15 +22,27 @@ interface Scenario {
   check?: (r: TurnResult) => string[]; // extra assertions; return problems (empty = pass)
 }
 
-/** Which "Changed / Unchanged / Could not confirm" section of a re-check answer mentions `name`. */
-function sectionOf(answer: string, name: RegExp): string | null {
-  let current: string | null = null;
-  for (const line of answer.split("\n")) {
-    const h = line.match(/\b(Could not confirm|Unchanged|Changed)\b/i);
-    if (h && /\*\*|^#/.test(line)) current = h[1].toLowerCase();
-    if (name.test(line) && current) return current;
-  }
-  return null;
+/**
+ * Re-check answers: every item is a labelled "then → now — <label>" line, the model writes no verdict,
+ * and the server-computed Summary matches the labels. Counted here with a deliberately DIFFERENT parser
+ * (last label word on each "→" line) from src/verdict.ts, so the eval is not the code checking itself.
+ */
+function tallyCheck(minItems: number) {
+  return (r: TurnResult): string[] => {
+    const p: string[] = [];
+    const lines = r.answer.split("\n");
+    const labels = lines
+      .filter((l) => l.includes("→"))
+      .map((l) => [...l.toLowerCase().matchAll(/could not confirm|unchanged|changed/g)].at(-1)?.[0])
+      .filter(Boolean) as string[];
+    if (labels.length < minItems) p.push(`expected ≥${minItems} labelled "then → now — label" lines, found ${labels.length}`);
+    if (lines.some((l) => /\bverdict\b/i.test(l))) p.push("model wrote its own verdict line");
+    const summary = lines.find((l) => l.includes("**Summary:**")) ?? "";
+    const n = (l: string) => labels.filter((x) => x === l).length;
+    const want = `${n("changed")} changed, ${n("unchanged")} unchanged, ${n("could not confirm")} could not confirm`;
+    if (labels.length && !summary.includes(want)) p.push(`summary "${summary}" does not match labels (${want})`);
+    return p;
+  };
 }
 
 const scenarios: Scenario[] = [
@@ -64,7 +76,8 @@ const scenarios: Scenario[] = [
     mustMatch: [/could not confirm|couldn'?t confirm|unable to (confirm|verify)|could not (find|verify)/i],
     check: (r) => {
       const line = r.answer.split("\n").find((l) => /quorvex/i.test(l) && /\$12/.test(l)) ?? "";
-      return /\bunchanged\b|still (correct|\$12)/i.test(line) ? [`absence treated as unchanged: "${line.trim()}"`] : [];
+      const p = /\bunchanged\b|still (correct|\$12)/i.test(line) ? [`absence treated as unchanged: "${line.trim()}"`] : [];
+      return [...p, ...tallyCheck(1)(r)];
     },
   },
   {
@@ -91,12 +104,8 @@ const scenarios: Scenario[] = [
       const current = r.searches.filter((s) => !s.since).length;
       if (current < 3) p.push(`only ${current} searches without since (need one per tool for current values)`);
       const line = r.answer.split("\n").find((l) => /pipedrive/i.test(l)) ?? "";
-      if (sectionOf(r.answer, /pipedrive/i) === "unchanged" || /\bunchanged\b|now \$15\b/i.test(line))
-        p.push("stale Pipedrive $15 claim was marked Unchanged");
-      // the verdict must not count the stale Pipedrive claim as unchanged (3 items, so 3 unchanged = wrong)
-      const verdict = r.answer.split("\n").find((l) => /verdict/i.test(l)) ?? r.answer.trim().split("\n")[0];
-      if (/\b(all|3 of 3|3)\b[^\n]*\bunchanged|^\W*unchanged\W*$/i.test(verdict)) p.push(`verdict counts everything unchanged: "${verdict.trim()}"`);
-      return p;
+      if (/\bunchanged\b|now \$15\b/i.test(line)) p.push("stale Pipedrive $15 claim was marked Unchanged");
+      return [...p, ...tallyCheck(3)(r)];
     },
   },
   {
@@ -120,6 +129,7 @@ const scenarios: Scenario[] = [
     ask: "What did I ask you on 3 November? Is your answer still correct today?",
     mustSearch: true,
     mustMatch: [/supabase/i, /\[\d+\]/],
+    check: tallyCheck(1), // was regex-only and passed a "Changed" item with a "1 could not confirm" verdict
   },
   {
     name: "pricing-changes-since",
@@ -127,6 +137,7 @@ const scenarios: Scenario[] = [
     ask: "Last Tuesday I asked about Postgres hosting. Has any pricing changed since then?",
     mustSearch: true,
     mustMatch: [/(neon|supabase)/i, /\[\d+\]/],
+    check: tallyCheck(2),
   },
   {
     name: "missing-shortlist",

@@ -18,7 +18,7 @@ Model `gemini-3.5-flash-lite`, summary `gemini-3.1-flash-lite`, Tavily basic. Or
 5. **MODEL LIMIT (fix 4)**: answer is right (asks, invents nothing) but flash-lite still does 1 search, 9/9 runs across 3 levers. **Needless search when the answer is "tell me the list".** Eval `missing-shortlist`: answer was right (asked for the 5 tools, no invention) but it first searched "CRM tools for 20 person sales team", costing ~2.5 s and a Tavily credit.
 
 ## New (found in the full run after fixes)
-6. **Verdict miscounts its own labels.** Eval `still-correct`: item line "Supabase Pro pricing: then $25/month per project → now $25/month per organization + usage [1][2] — Changed", then "**Verdict:** 0 changed, 0 unchanged, 1 could not confirm". The eval passed it (regex too weak). Candidate fix in code: recount the `— <label>` lines and correct the verdict line.
+6. **FIXED (tally computed in code, src/verdict.ts)**: **Verdict miscounts its own labels.** Eval `still-correct`: item line "Supabase Pro pricing: then $25/month per project → now $25/month per organization + usage [1][2] — Changed", then "**Verdict:** 0 changed, 0 unchanged, 1 could not confirm". The eval passed it (regex too weak). Candidate fix in code: recount the `— <label>` lines and correct the verdict line.
 7. **Model latency swings unrelated to search.** `missing-shortlist`: 2.9-6.2 s earlier, 14.6 s in the full run with the same single search. Free-tier load; measure medians in Step 7 rather than single runs.
 
 ## Worked well (keep)

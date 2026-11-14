@@ -32,7 +32,7 @@ You are shown the current date/time and a "memory brief" of earlier turns with t
 2. For EACH item, search for its CURRENT value WITHOUT \`since\` (e.g. "<product> pricing"), all in parallel. Optionally add a \`since\` search for news of a change, but never rely on \`since\` searches alone: pricing and docs pages are rarely republished, so a \`since\` search mostly finds blog posts.
 3. Absence is not evidence. "No new pages since then" does NOT mean unchanged. Mark an item **Unchanged** only when a current source you were shown states the same value; otherwise it goes under **Could not confirm**, with the reason.
 4. Compare explicitly. For each item write: \`<item>: then <old value> → now <current value> [n] — <label>\`. The label follows from that line: different values = **Changed**; same value = **Unchanged**; no current value from a source = **Could not confirm** (say why). A different number is a change even if you suspect the old one was wrong; say so. Take "now" from the source as written, as if you did not know the old value: never widen a range or reinterpret a plan so that it still includes the old value.
-5. Reply with one line per item (every item, labelled), and only THEN a final line \`**Verdict:** <n> changed, <n> unchanged, <n> could not confirm\`, counted from the labels above. The verdict goes last on purpose: written first, it is a guess made before the comparison.
+5. Reply with one line per item (every item, labelled exactly as above, label last). With no current value, keep the same shape: \`<item>: then <old value> → now not found — Could not confirm (why)\`. Do NOT write a verdict, total or summary line: the app counts your labels and adds it.
 `;
 
 export function dynamicPrompt(time: TimeCtx, memoryBrief: string): string {

@@ -53,6 +53,10 @@ const mockGemini = http.createServer(async (req, res) => {
     res.write(sse(cand([{ text: "[1]." }], "STOP")));
   } else if (/latest/i.test(lastText)) {
     res.write(sse(cand([{ functionCall: { id: "c1", name: "web_search", args: { query: "latest node lts" } } }, { functionCall: { id: "c2", name: "web_search", args: { query: "node release schedule", since: "2026-01-01" } } }], "STOP")));
+  } else if (/still correct/i.test(lastText)) {
+    // a re-check answer: labelled item lines, no tally (the server must compute it)
+    res.write(sse(cand([{ text: "- Neon: then $19 → now $19 [1] — Unchanged\n" }])));
+    res.write(sse(cand([{ text: "- Supabase: then $25 → now $30 [2] — **Changed**\n- Quorvex: then $12 → now ? — Could not confirm (no source)" }], "STOP")));
   } else if (/blocked/i.test(lastText)) {
     res.write(sse({ candidates: [{ finishReason: "SAFETY" }] }));
   } else {
@@ -125,6 +129,18 @@ assert.equal(allTurns("u").length, n);
 failNext429 = 1;
 const r4 = await runTurn({ userId: "u", message: "hello again", time });
 assert.match(r4.answer, /welcome/i);
+
+// 4b. re-check tally is computed in code from the labels, sent as ONE final text delta, and saved
+const deltas: string[] = [];
+const r4b = await runTurn({ userId: "u", message: "Is it still correct?", time, onEvent: (e) => e.type === "text" && deltas.push(e.delta) });
+const tally = "**Summary:** 1 changed, 1 unchanged, 1 could not confirm";
+assert.equal(deltas.at(-1), `\n\n${tally}`);
+assert.ok(r4b.answer.endsWith(tally));
+assert.ok(allTurns("u").find((t) => t.id === r4b.turnId)?.answer_text.endsWith(tally));
+assert.doesNotMatch(r4.answer, /Summary:/); // ordinary answers get no tally
+const { itemLabels, summaryLine } = await import("../src/verdict.js");
+assert.deepEqual(itemLabels("A: then 1 → now 2 — Unchanged\nB: then 1 → now 2 – **changed**\nper-user pricing changed a lot"), ["unchanged", "changed"]);
+assert.equal(summaryLine("No comparison lines here — changed"), null); // no "→": not a label line
 
 // 5. MODEL_FALLBACKS: a 503 on the primary falls through to the backup, and the turn stays on it
 calls.length = 0;

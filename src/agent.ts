@@ -21,6 +21,7 @@ import {
 } from "./memory.js";
 import { dynamicPrompt, STABLE_PROMPT, SUMMARY_PROMPT } from "./prompt.js";
 import { withModelFallback } from "./models.js";
+import { summaryLine } from "./verdict.js";
 import { runSearch, searchTool, SourceRegistry, type SearchInput } from "./search.js";
 import { describeInstant, localDate, type TimeCtx } from "./time.js";
 
@@ -220,6 +221,15 @@ export async function runTurn(opts: {
     const timings: Timings = { firstTokenMs, totalMs: Date.now() - t0, rounds };
     emit({ type: "done", timings, searches });
     return { answer: FALLBACK_ANSWER, sources: [], searches, searchesPerRound, timings, turnId: null };
+  }
+
+  // Re-check answers: the tally is computed from the per-item labels (verdict.ts), appended as one final
+  // delta so nothing already streamed is rewritten, and saved with the answer.
+  const summary = summaryLine(answer);
+  if (summary) {
+    const delta = `\n\n${summary}`;
+    answer += delta;
+    emit({ type: "text", delta });
   }
 
   // Only keep sources the answer actually cites; [n] already matches the registry numbers.
