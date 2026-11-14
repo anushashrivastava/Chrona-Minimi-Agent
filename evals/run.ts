@@ -155,6 +155,25 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    // Fix 2: two items -> both searched in the FIRST round (parallel), grounded in at least one official
+    // source. A later refinement round is tolerated but must fit the latency budget (maxMs).
+    name: "parallel-official-sources",
+    seed: [],
+    ask: "What are the latest stable versions of Python and TypeScript?",
+    mustSearch: true,
+    mustMatch: [/python/i, /typescript/i, /\d+\.\d+/, /\[\d+\]/],
+    maxMs: 12000,
+    check: (r) => {
+      const p: string[] = [];
+      const first = r.searches.slice(0, r.searchesPerRound[0] ?? 0).map((s) => s.query).join(" ");
+      if (!/python/i.test(first) || !/typescript/i.test(first))
+        p.push(`first round did not cover both items in parallel: [${r.searchesPerRound.join(",")}] ${first}`);
+      const official = /python\.org|typescriptlang\.org|devblogs\.microsoft\.com|github\.com\/microsoft|npmjs\.com\/package\/typescript/;
+      if (!r.sources.some((s) => official.test(s.url))) p.push(`no official source cited: ${r.sources.map((s) => s.url).join(", ")}`);
+      return p;
+    },
+  },
+  {
     name: "fresh-fact",
     seed: [],
     ask: "What's the latest stable version of Node.js?",
@@ -191,7 +210,7 @@ for (const s of scenarios.filter((s) => !only || s.name.includes(only))) {
 
   const ok = problems.length === 0;
   if (!ok) failed++;
-  console.log(`${ok ? "✓" : "✗"} ${s.name}  (${(r.timings.totalMs / 1000).toFixed(1)}s, first token ${r.timings.firstTokenMs ?? "-"}ms, ${r.searches.length} searches)`);
+  console.log(`${ok ? "✓" : "✗"} ${s.name}  (${(r.timings.totalMs / 1000).toFixed(1)}s, first token ${r.timings.firstTokenMs ?? "-"}ms, ${r.searches.length} searches, per round [${r.searchesPerRound.join(",")}])`);
   problems.forEach((p) => console.log("    - " + p));
   if (process.env.EVAL_SHOW === "1") {
     // full answer + queries, to judge quality by eye (regex asserts are cheap, not sufficient)

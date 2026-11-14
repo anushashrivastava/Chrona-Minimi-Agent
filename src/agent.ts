@@ -41,6 +41,7 @@ export interface TurnResult {
   answer: string;
   sources: SourceRef[];
   searches: SearchInput[];
+  searchesPerRound: number[]; // e.g. [3] = one parallel round, [1,1,1] = sequential (slow)
   timings: Timings;
   turnId: number | null; // null when nothing was saved (empty/blocked answer)
 }
@@ -158,6 +159,7 @@ export async function runTurn(opts: {
   // --- 2. tool loop -----------------------------------------------------------
   const registry = new SourceRegistry();
   const searches: SearchInput[] = [];
+  const searchesPerRound: number[] = [];
   let firstTokenMs: number | null = null;
   let answer = "";
   let rounds = 0;
@@ -194,6 +196,7 @@ export async function runTurn(opts: {
     contents.push({ role: "model", parts: r.parts });
     const inputs = r.calls.map((c) => (c.args ?? {}) as unknown as SearchInput);
     searches.push(...inputs);
+    searchesPerRound.push(inputs.length);
     emit({ type: "status", text: "Searching: " + inputs.map((i) => i.query).join(" · ") });
 
     // Parallel: N searches cost about the latency of one.
@@ -216,7 +219,7 @@ export async function runTurn(opts: {
     emit({ type: "text", delta: FALLBACK_ANSWER });
     const timings: Timings = { firstTokenMs, totalMs: Date.now() - t0, rounds };
     emit({ type: "done", timings, searches });
-    return { answer: FALLBACK_ANSWER, sources: [], searches, timings, turnId: null };
+    return { answer: FALLBACK_ANSWER, sources: [], searches, searchesPerRound, timings, turnId: null };
   }
 
   // Only keep sources the answer actually cites; [n] already matches the registry numbers.
@@ -239,7 +242,7 @@ export async function runTurn(opts: {
   const summarise = summariseTurn(turnId, message, answer, localDate(time.now, time.tz));
   if (opts.awaitSummary) await summarise;
 
-  return { answer, sources, searches, timings, turnId };
+  return { answer, sources, searches, searchesPerRound, timings, turnId };
 }
 
 /**
