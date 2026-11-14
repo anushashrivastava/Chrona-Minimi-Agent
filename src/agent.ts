@@ -20,7 +20,7 @@ import {
   type Claim,
   type SourceRef,
 } from "./memory.js";
-import { dynamicPrompt, STABLE_PROMPT, SUMMARY_PROMPT } from "./prompt.js";
+import { dynamicPrompt, RECHECK_PROMPT, STABLE_PROMPT, SUMMARY_PROMPT } from "./prompt.js";
 import { withModelFallback } from "./models.js";
 import { summaryLine } from "./verdict.js";
 import { renumberCitations, runSearch, searchTool, SourceRegistry, type SearchInput } from "./search.js";
@@ -196,9 +196,14 @@ export async function runTurn(opts: {
   }
   contents.push({ role: "user", parts: [{ text: message }] });
 
+  // An earlier answer is in view only if recall found saved turns or there is a recent transcript. Without
+  // one, the re-check shape is not sent at all (the model invented "then" values from it) and no tally is
+  // added (it would make an invention look checked).
+  const hasHistory = recent.length > 0 || rec.byDate.length > 0 || rec.byTopic.length > 0;
+
   // Stable text first, per-turn text (date + memory) last: keeps the shared prefix identical across turns,
-  // which is what any provider-side prompt caching keys on.
-  const system = STABLE_PROMPT + "\n" + dynamicPrompt(time, brief);
+  // which is what any provider-side prompt caching keys on. (Two stable variants: with/without RECHECK_PROMPT.)
+  const system = STABLE_PROMPT + (hasHistory ? RECHECK_PROMPT : "") + "\n" + dynamicPrompt(time, brief);
 
   // --- 2. tool loop -----------------------------------------------------------
   const registry = new SourceRegistry();
@@ -285,9 +290,7 @@ export async function runTurn(opts: {
 
   // Re-check answers: the tally is computed from the per-item labels (verdict.ts), appended as one final
   // delta so nothing already streamed is rewritten, and saved with the answer.
-  // Only with an earlier conversation actually in view: with no history, "then → now" lines are invented
-  // (seen in cold-start evals), and a computed tally would make the invention look checked.
-  const hasHistory = recent.length > 0 || rec.byDate.length > 0 || rec.byTopic.length > 0;
+  // Only with an earlier conversation actually in view (hasHistory, above).
   const summary = hasHistory ? summaryLine(answer) : null;
   if (summary) {
     const delta = `\n\n${summary}`;

@@ -231,7 +231,12 @@ const scenarios: Scenario[] = [
     ask: "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?",
     mustSearch: true,
     mustMatch: [/\[\d+\]/, DATE],
-    mustNotMatch: [/as I (said|mentioned)|I (told|recommended|suggested) you|last time I|when we (spoke|talked)|you asked me about [^.]* and I/i],
+    mustNotMatch: [
+      /as I (said|mentioned)|I (told|recommended|suggested) you|last time I|when we (spoke|talked)|you asked me about [^.]* and I/i,
+      // no history -> no re-check shape: it once wrote "Supabase Pro: then $25/month → now $25/month — Unchanged"
+      /\bthen\b[^\n]*→/i,
+      /[—–-]\s*\**\s*(changed|unchanged|could not confirm)\b|\*\*(changed|unchanged|could not confirm)\*\*|\bSummary:/i,
+    ],
     check: (r) => {
       const p: string[] = [];
       const first = r.answer.trim().split(/(?<=[.!?])\s+/)[0];

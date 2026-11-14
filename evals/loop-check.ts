@@ -135,6 +135,8 @@ const r2 = await runTurn({ userId: "u", message: "thanks", time, awaitSummary: t
 assert.equal(r2.searches.length, 0);
 assert.equal(seen[before].contents[0].role, "user");
 assert.match(seen[before].contents[0].parts[0].text, /^\[.*2026, \d\d:\d\d\] What's the latest Node LTS\?/);
+assert.match(seen[before].systemInstruction.parts[0].text, /then <old value> →/); // with history: re-check shape present
+assert.doesNotMatch(seen[0].systemInstruction.parts[0].text, /then <old value> →/); // first turn, no history: absent
 
 // 3. blocked/empty answer is NOT saved
 const n = allTurns("u").length;
@@ -202,6 +204,8 @@ assert.ok(iReset > 0 && ev4e[iReset + 1]?.delta === leadLine, "lead re-sent afte
 assert.equal(r4e.answer, leadLine + "Node 24 is the current LTS [1].");
 assert.equal(allTurns("cold")[0].answer_text, r4e.answer);
 assert.match(seen[before4e].systemInstruction.parts[0].text, /Already told the user: "I have no record of a conversation with you on Tuesday, 3 November 2026\."/);
+// no history -> the re-check instructions and the "then X → now Y — label" shape are not in the prompt at all
+assert.doesNotMatch(seen[before4e].systemInstruction.parts[0].text, /then <old value> →|Is it still correct\?|Could not confirm/);
 assert.equal((await runTurn({ userId: "cold2", message: "On Monday we shortlisted X and Y. thanks", time })).answer, "You're welcome!"); // guard 1: no lead
 // a restated lead (split across stream chunks) is dropped before it is shown
 const shown4e: string[] = [];

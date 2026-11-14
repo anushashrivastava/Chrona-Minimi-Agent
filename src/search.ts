@@ -8,7 +8,7 @@ export const searchTool: FunctionDeclaration = {
   name: "web_search",
   description:
     "Search the web for current information. Use it for anything that can change (prices, versions, news, " +
-    "who holds a role, availability) and to check whether an earlier answer is still correct. " +
+    "who holds a role, availability). " +
     "Make queries short and specific. Issue several searches in parallel when you need to cover several items " +
     "(one query per item). `since` restricts to pages published after a date: use it to look for news of a " +
     "change, never as the only check of a current value (pricing/docs pages are rarely republished).",
