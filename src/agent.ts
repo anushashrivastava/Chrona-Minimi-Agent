@@ -49,6 +49,7 @@ export interface TurnResult {
 }
 
 const FALLBACK_ANSWER = "Sorry, I couldn't produce an answer to that. Try rephrasing, or ask again in a moment.";
+const NUDGE = "Answer now from the search results above; no more searches.";
 
 let client: GoogleGenAI | null = null;
 // GEMINI_BASE_URL is only for the offline loop test (a local mock server); leave unset in real use.
@@ -228,9 +229,19 @@ export async function runTurn(opts: {
       firstTokenMs ??= Date.now() - t0;
       emit({ type: "text", delta });
     });
-    const r = await streamRound({ model: turnModel, contents, system, forceAnswer, onText: shown.push });
+    let r = await streamRound({ model: turnModel, contents, system, forceAnswer, onText: shown.push });
 
     turnModel = r.model;
+    // The forced final round (tools off) once returned no text at all after 2 search rounds, and the user got
+    // the fallback message despite good search results. Retry once with an explicit nudge (Gemini accepts a
+    // user text turn right after the function responses: checked live), then fall through to the fallback.
+    if (forceAnswer && !r.text.trim()) {
+      console.warn(`[agent] forced final answer was empty (finishReason=${r.finishReason ?? "none"}); retrying once`);
+      contents.push({ role: "user", parts: [{ text: NUDGE }] }); // the empty model turn is not replayed
+      rounds++;
+      r = await streamRound({ model: turnModel, contents, system, forceAnswer: true, onText: shown.push });
+      if (!r.text.trim()) console.warn(`[agent] still empty after the nudge (finishReason=${r.finishReason ?? "none"})`);
+    }
     if (!r.calls.length || forceAnswer) {
       answer = leadText + shown.kept();
       if (r.finishReason === "MAX_TOKENS") {

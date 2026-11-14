@@ -48,6 +48,16 @@ const mockGemini = http.createServer(async (req, res) => {
   const last = body.contents.at(-1);
   const lastText: string = last.parts.map((p: any) => p.text ?? "").join("");
   res.writeHead(200, { "content-type": "text/event-stream" });
+  // "empty forced": search, search again (reaching the forced round), then the forced round (tools off)
+  // returns NO text; the nudge then gets an answer, unless the message says "twice" (empty again).
+  const allUserText = body.contents.filter((c: any) => c.role === "user").flatMap((c: any) => c.parts.map((p: any) => p.text ?? "")).join(" ");
+  if (/empty forced/i.test(allUserText)) {
+    const mode = body.toolConfig?.functionCallingConfig?.mode;
+    if (/Answer now from the search results/.test(lastText) && !/twice/i.test(allUserText)) res.write(sse(cand([{ text: "Node 24 is LTS [1]." }], "STOP")));
+    else if (mode === "NONE") res.write(sse(cand([], "STOP")));
+    else res.write(sse(cand([{ functionCall: { id: `e${seen.length}`, name: "web_search", args: { query: `empty forced ${seen.length}` } } }], "STOP")));
+    return res.end();
+  }
   const firstUser: string = body.contents.findLast((c: any) => c.role === "user" && c.parts.some((p: any) => p.text))?.parts[0].text ?? "";
   if (last.parts.some((p: any) => p.functionResponse)) {
     res.write(sse(cand([{ text: "Node 24 is the current LTS " }])));
@@ -215,6 +225,21 @@ assert.equal(shown4e.join(""), r4f.answer); // what the user saw == what was sav
 // no history -> no computed tally, even if the model writes labelled then→now lines
 const r4g = await runTurn({ userId: "cold4", message: "Is it still correct?", time });
 assert.doesNotMatch(r4g.answer, /Summary:/);
+
+// 4h. empty forced final answer (tools off, no text) -> one retry with a user-turn nudge
+const before4h = seen.length;
+const r4h = await runTurn({ userId: "u", message: "Node LTS? (empty forced)", time });
+const req4h = seen.slice(before4h);
+assert.deepEqual(req4h.map((b: any) => b.toolConfig.functionCallingConfig.mode), ["AUTO", "AUTO", "NONE", "NONE"]); // 2 searches, forced, nudge
+assert.equal(req4h.at(-1).contents.at(-1).parts[0].text, "Answer now from the search results above; no more searches.");
+assert.equal(r4h.answer, "Node 24 is LTS [1].");
+assert.ok(r4h.turnId);
+// ...and if it is still empty after the nudge: the fixed fallback, nothing saved, no third try
+const before4i = seen.length;
+const r4i = await runTurn({ userId: "u", message: "Node LTS? (empty forced twice)", time });
+assert.equal(seen.length - before4i, 4);
+assert.match(r4i.answer, /couldn't produce an answer/);
+assert.equal(r4i.turnId, null);
 
 // 5. MODEL_FALLBACKS: a 503 on the primary falls through to the backup, and the turn stays on it
 calls.length = 0;
