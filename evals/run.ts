@@ -179,7 +179,8 @@ const scenarios: Scenario[] = [
     mustSearch: false,
     maxSearches: 1,
     mustNotMatch: [/hubspot|pipedrive|salesforce|zoho|freshsales|close\.com|monday\.com/i, /→|Summary:/],
-    mustMatch: [/\?/, /(which|what)/i],
+    // a request for the list, as a question or not ("...please name them so I can check..." is correct)
+    mustMatch: [/\?|please (name|list|share|tell)|name them|list them/i, /which|what|name them|list them|name the/i],
     check: (r) => (r.answer.length > 300 ? [`not short: ${r.answer.length} chars`] : []),
   },
   {
@@ -281,7 +282,8 @@ const scenarios: Scenario[] = [
     mustSearch: true,
     mustMatch: [/\$29/, /\$24/, /\[\d+\]/], // both values named, newer ($29) present
     check: (r) =>
-      /(disagree|conflict|differ|inconsisten|while|but|however|whereas)/i.test(r.answer) ? [] : ["disagreement not stated"],
+      // "costs either $24 or $29 per month depending on the source" states the disagreement correctly
+      /(disagree|conflict|differ|inconsisten|while|but|however|whereas|either|depending on)/i.test(r.answer) ? [] : ["disagreement not stated"],
   },
   {
     // Fix 3: the background summary must actually store dated claims (it used to die on free-tier 503s,

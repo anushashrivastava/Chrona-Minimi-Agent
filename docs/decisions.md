@@ -152,3 +152,7 @@ Full suite once (18 scenarios): 13 ✓ by the asserts. Read by eye: 12 behave co
 
 ## Freeze exception 3: citation lists
 - The model sometimes writes "[1, 5]" or "[1,5]"; `renumberCitations` only knew "[n]", so those were neither checked against the turn's sources nor renumbered. They are now split into "[1][5]" first, then handled like any marker. Offline asserts in `check:loop` (incl. a list containing an unknown number, which is dropped).
+
+## Freeze exception 4 and re-freeze
+- Two eval regexes were stricter than the requirement and failed correct answers: A1 now accepts a request for the list without a "?" ("...please name them so I can check..."), and `s8-conflicting-sources` accepts "either $24 or $29 ... depending on the source". Checked offline against the recorded final-run answers (0 credits); A1 still rejects a non-ask.
+- Credits for the four exceptions: 10 Tavily (3 A4 runs), plus 2 direct Gemini calls to verify the nudge format. Full suite deliberately not rerun. Repo re-frozen: only fixes for bugs the friend test finds.
