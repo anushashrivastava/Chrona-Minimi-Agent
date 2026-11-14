@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite"; // built in: no native build step, `
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { describeInstant, localDate, resolvePastDates, type TimeCtx } from "./time.js";
+import { describeDate, describeInstant, localDate, resolvePastDates, type TimeCtx } from "./time.js";
 
 export interface Claim {
   claim: string; // e.g. "Pipedrive Essential costs $14/user/month"
@@ -225,7 +225,7 @@ function fmtTurn(t: TurnRow): string {
   const claims: Claim[] = t.claims_json ? JSON.parse(t.claims_json) : [];
   const sources: SourceRef[] = t.sources_json ? JSON.parse(t.sources_json) : [];
   const lines = [
-    `### ${describeInstant(t.ts, t.tz)}`,
+    `#### ${describeInstant(t.ts, t.tz)}`,
     `User asked: ${t.user_text}`,
     t.summary ? `Your answer (summary): ${t.summary}` : `Your answer: ${t.answer_text.slice(0, 600)}`,
   ];
@@ -237,18 +237,19 @@ function fmtTurn(t: TurnRow): string {
   return lines.join("\n");
 }
 
-/** The "memory brief" injected into the system prompt. Empty string when nothing relevant. */
+/**
+ * The "earlier conversations" section injected into the system prompt ("memory brief" in code only).
+ * Facts only, no instructions, in a voice that is harmless if the model echoes it: the old
+ * "There are NO saved turns ... Say so plainly; do not guess." got repeated to users and discouraged
+ * answering the still-answerable part of a question. Dates are spelled out ("Monday 9 November 2026")
+ * so the model does not have to work out the weekday itself.
+ */
 export function buildMemoryBrief(r: Recall): string {
   const parts: string[] = [];
-  if (r.missingDates.length)
-    parts.push(
-      `The user referred to ${r.missingDates.join(", ")}. There are NO saved turns on that date. Say so plainly; do not guess.`,
-    );
-  if (r.inTranscriptDates.length)
-    parts.push(
-      `The user's turns on ${r.inTranscriptDates.join(", ")} are in the conversation above (see the [date] stamps on their messages).`,
-    );
-  if (r.byDate.length) parts.push(`## Turns on the date(s) the user mentioned (${r.dates.join(", ")})\n` + r.byDate.map(fmtTurn).join("\n\n"));
-  if (r.byTopic.length) parts.push("## Possibly related earlier turns\n" + r.byTopic.map(fmtTurn).join("\n\n"));
+  const days = (ds: string[]) => ds.map(describeDate).join(" or ");
+  if (r.missingDates.length) parts.push(`No conversation is saved for ${days(r.missingDates)}.`);
+  if (r.inTranscriptDates.length) parts.push(`The conversation on ${days(r.inTranscriptDates)} is in the chat above.`);
+  if (r.byDate.length) parts.push(`### Saved conversations from ${days(r.dates)}\n` + r.byDate.map(fmtTurn).join("\n\n"));
+  if (r.byTopic.length) parts.push("### Possibly related earlier conversations\n" + r.byTopic.map(fmtTurn).join("\n\n"));
   return parts.join("\n\n");
 }

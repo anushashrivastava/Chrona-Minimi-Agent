@@ -54,6 +54,20 @@ export function describeNow({ now, tz }: TimeCtx): string {
   return `${s} (${tz})`;
 }
 
+/**
+ * "Monday 9 November 2026" for a stored YYYY-MM-DD. It is a calendar date (already the user's local day),
+ * so it is formatted at UTC noon: no timezone can shift it to a neighbouring day.
+ */
+export function describeDate(ymd: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(`${ymd}T12:00:00Z`));
+}
+
 /** Short stamp for memory entries: "Mon 3 Nov 2026, 14:02". */
 export function describeInstant(ts: number, tz: string): string {
   return new Intl.DateTimeFormat("en-GB", {

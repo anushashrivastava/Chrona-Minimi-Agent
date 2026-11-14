@@ -40,15 +40,17 @@ const brief = buildMemoryBrief(byDate);
 assert.match(brief, /Supabase Pro costs \$25\/month \(as of 2026-11-03\)/);
 
 const none = buildMemoryBrief(recall("u", "what did I ask on 1 October", time));
-assert.match(none, /NO saved turns on that date/);
+assert.match(none, /No conversation is saved for Thursday,? 1 October 2026./); // weekday + date spelled out in code
 
 // regression: a date whose turn is in the recent transcript must not be reported as "NO saved turns"
 // (the brief used to contradict the transcript). And "still correct today?" never reports today as empty.
 resetDb(":memory:");
 saveTurn({ userId: "u", ts: at("2026-11-03T14:02:00+05:30"), tz, userText: "cheapest managed Postgres host?", answerText: "Neon" });
 const recentBrief = buildMemoryBrief(recall("u", "What did I ask you on 3 November? Is it still correct today?", time));
-assert.doesNotMatch(recentBrief, /NO saved turns/);
-assert.match(recentBrief, /2026-11-03 are in the conversation above/);
-assert.match(buildMemoryBrief(recall("u", "What did I ask you on 5 November?", time)), /2026-11-05\. There are NO saved turns/);
+assert.doesNotMatch(recentBrief, /No conversation is saved/);
+assert.match(recentBrief, /conversation on Tuesday,? 3 November 2026 is in the chat above/);
+const missing = buildMemoryBrief(recall("u", "What did I ask you on 5 November?", time));
+assert.match(missing, /No conversation is saved for Thursday,? 5 November 2026\./);
+assert.doesNotMatch(missing, /say so|do not guess|plainly/i); // facts only: no instructions the model could echo
 
 console.log("✓ memory + time checks passed");
