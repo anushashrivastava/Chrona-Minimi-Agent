@@ -20,16 +20,17 @@ app.post("/api/chat", async (c) => {
   const time = makeTimeCtx({ tz: body.tz, fakeNow: c.req.header("x-fake-now") });
 
   return streamSSE(c, async (stream) => {
+    // Writes are chained (keeps order) and awaited before we return: the stream closes when this callback
+    // resolves, and fire-and-forget writes still in flight were dropped, so `sources`/`done` never arrived.
+    let writes = Promise.resolve();
+    const send = (event: string, data: unknown) =>
+      (writes = writes.then(() => stream.writeSSE({ event, data: JSON.stringify(data) })));
     try {
-      await runTurn({
-        userId,
-        message,
-        time,
-        onEvent: (e) => void stream.writeSSE({ event: e.type, data: JSON.stringify(e) }),
-      });
+      await runTurn({ userId, message, time, onEvent: (e) => void send(e.type, e) });
     } catch (err) {
-      await stream.writeSSE({ event: "error", data: JSON.stringify({ type: "error", message: friendlyError(err) }) });
+      send("error", { type: "error", message: friendlyError(err) });
     }
+    await writes;
   });
 });
 

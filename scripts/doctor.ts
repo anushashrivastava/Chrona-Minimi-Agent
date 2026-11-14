@@ -30,12 +30,20 @@ if (geminiKey) {
   } catch (e) {
     bad("Gemini model list failed: " + (e as Error).message.slice(0, 200));
   }
-  try {
+  // Call BOTH models: being listed is not enough (some listed models reject new users, and one hung).
+  // The 30 s abort turns a silent hang into a clear failure.
+  for (const id of new Set([config.model, config.fastModel])) {
     const t = Date.now();
-    const r = await ai.models.generateContent({ model: config.model, contents: "Reply with the single word: pong", config: { maxOutputTokens: 64 } });
-    ok(`${config.model} answered "${(r.text ?? "").trim().slice(0, 20)}" in ${Date.now() - t} ms`);
-  } catch (e) {
-    bad(`${config.model} call failed: ${(e as Error).message.slice(0, 200)} (a 429 here means free-tier quota for this model; try another MODEL)`);
+    try {
+      const r = await ai.models.generateContent({
+        model: id,
+        contents: "Reply with the single word: pong",
+        config: { maxOutputTokens: 256, abortSignal: AbortSignal.timeout(30_000) },
+      });
+      ok(`${id} answered "${(r.text ?? "").trim().slice(0, 20)}" in ${Date.now() - t} ms`);
+    } catch (e) {
+      bad(`${id} call failed after ${Date.now() - t} ms: ${(e as Error).message.slice(0, 200)} (a 429 here means free-tier quota for this model; try another one)`);
+    }
   }
 }
 

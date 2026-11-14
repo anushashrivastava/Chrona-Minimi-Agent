@@ -30,6 +30,6 @@ Streams SSE events: `status`, `text`, `reset`, `sources`, `done`, `error`. Histo
 |---|---|
 | `GEMINI_API_KEY` | model (free tier: https://aistudio.google.com/apikey) |
 | `TAVILY_API_KEY` | web search (free tier: https://app.tavily.com) |
-| `MODEL` / `FAST_MODEL` | answer model / background summariser (default `gemini-2.5-flash` / `gemini-2.5-flash-lite`) |
+| `MODEL` / `FAST_MODEL` | answer model / background summariser (default `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite`; `npm run doctor` checks both) |
 | `THINKING_BUDGET` | optional thinking tokens for the answer model (empty = default, 0 = off) |
 | `ALLOW_FAKE_NOW=1` | testing only: honour the `x-fake-now` header |

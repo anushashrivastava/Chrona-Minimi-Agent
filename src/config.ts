@@ -5,8 +5,8 @@ const budget = process.env.THINKING_BUDGET?.trim();
 
 export const config = {
   port: Number(process.env.PORT ?? 3000),
-  model: process.env.MODEL ?? "gemini-2.5-flash",
-  fastModel: process.env.FAST_MODEL ?? "gemini-2.5-flash-lite",
+  model: process.env.MODEL ?? "gemini-3.5-flash-lite",
+  fastModel: process.env.FAST_MODEL ?? "gemini-3.1-flash-lite",
   thinkingBudget: budget ? Number(budget) : undefined, // undefined = model default
   dbPath: process.env.DB_PATH ?? "data/agent.db",
   defaultTz: process.env.DEFAULT_TZ ?? "UTC",
