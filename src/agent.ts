@@ -13,6 +13,7 @@ import { config, requireEnv } from "./config.js";
 import {
   attachSummary,
   buildMemoryBrief,
+  noRecordLead,
   recall,
   recentTurns,
   saveTurn,
@@ -132,6 +133,39 @@ async function streamRound(opts: {
   return { ...value, model };
 }
 
+/**
+ * When code already sent the no-record line, the model tends to say it again (it did, word for word).
+ * Hold its first characters until we can tell; drop a restated "I have no record ..." sentence before
+ * anything reaches the user. Costs nothing visible: the lead line is already on screen.
+ */
+function dropRestatedLead(active: boolean, out: (delta: string) => void) {
+  const P = "i have no record";
+  let held = "";
+  let kept = "";
+  let decided = !active;
+  const send = (d: string) => {
+    if (!d) return;
+    kept += d;
+    out(d);
+  };
+  return {
+    push(delta: string) {
+      if (decided) return send(delta);
+      held += delta;
+      const h = held.trimStart().toLowerCase();
+      if (h.length < P.length ? P.startsWith(h) : h.startsWith(P)) {
+        const end = held.search(/[.\n]/);
+        if (end === -1) return; // still inside the (possibly restated) sentence: keep holding
+        decided = true;
+        return send(held.slice(end + 1).replace(/^\s+/, ""));
+      }
+      decided = true;
+      send(held);
+    },
+    kept: () => kept, // a held fragment never released is the restated lead itself: dropped
+  };
+}
+
 export async function runTurn(opts: {
   userId: string;
   message: string;
@@ -145,7 +179,12 @@ export async function runTurn(opts: {
 
   // --- 1. context -----------------------------------------------------------
   const recent = recentTurns(userId);
-  const brief = buildMemoryBrief(recall(userId, message, time));
+  const rec = recall(userId, message, time);
+  // Cold start: "what did I ask you on 3 November?" with nothing saved. Code knows that for certain, so code
+  // says it (guards in memory.ts) and the model is told it was already said, so it goes straight on.
+  const lead = noRecordLead(message, rec, recent.length, time);
+  const leadText = lead ? `${lead}\n\n` : "";
+  const brief = [lead ? `Already told the user: "${lead}"` : "", buildMemoryBrief(rec)].filter(Boolean).join("\n\n");
   const contents: Content[] = [];
   for (const t of recent) {
     contents.push({ role: "user", parts: [{ text: `[${describeInstant(t.ts, t.tz)}] ${t.user_text}` }] });
@@ -168,24 +207,23 @@ export async function runTurn(opts: {
   // Starts at MODEL; if a fallback answers, later rounds stay on it: replaying one model's parts (thought
   // signatures) to another model is asking for a 400.
   let turnModel = config.model;
+  if (leadText) {
+    firstTokenMs = Date.now() - t0; // the user sees this line before the model even starts
+    emit({ type: "text", delta: leadText });
+  }
 
   for (let round = 0; round <= config.maxToolRounds; round++) {
     rounds++;
     const forceAnswer = round === config.maxToolRounds; // force an answer, no more searching
-    const r = await streamRound({
-      model: turnModel,
-      contents,
-      system,
-      forceAnswer,
-      onText: (delta) => {
-        firstTokenMs ??= Date.now() - t0;
-        emit({ type: "text", delta });
-      },
+    const shown = dropRestatedLead(!!lead, (delta) => {
+      firstTokenMs ??= Date.now() - t0;
+      emit({ type: "text", delta });
     });
+    const r = await streamRound({ model: turnModel, contents, system, forceAnswer, onText: shown.push });
 
     turnModel = r.model;
     if (!r.calls.length || forceAnswer) {
-      answer = r.text;
+      answer = leadText + shown.kept();
       if (r.finishReason === "MAX_TOKENS") {
         const note = "\n\n_(The answer was cut off because it hit the output length limit.)_";
         answer += note;
@@ -193,7 +231,10 @@ export async function runTurn(opts: {
       }
       break;
     }
-    if (r.text) emit({ type: "reset" });
+    if (r.text) {
+      emit({ type: "reset" }); // discard the model's pre-search text, but keep our lead line on screen
+      if (leadText) emit({ type: "text", delta: leadText });
+    }
 
     contents.push({ role: "model", parts: r.parts });
     const inputs = r.calls.map((c) => (c.args ?? {}) as unknown as SearchInput);
@@ -228,6 +269,8 @@ export async function runTurn(opts: {
     emit({ type: "text", delta: answer });
   }
 
+  answer = answer.trimEnd(); // a lead with no model text after it would otherwise end in blank lines
+
   // Empty answer (safety block, refusal, cut-off before any text): never save it. A saved empty
   // assistant turn would be replayed into every later request and could break the chat for good.
   if (!answer.trim()) {
@@ -239,7 +282,10 @@ export async function runTurn(opts: {
 
   // Re-check answers: the tally is computed from the per-item labels (verdict.ts), appended as one final
   // delta so nothing already streamed is rewritten, and saved with the answer.
-  const summary = summaryLine(answer);
+  // Only with an earlier conversation actually in view: with no history, "then → now" lines are invented
+  // (seen in cold-start evals), and a computed tally would make the invention look checked.
+  const hasHistory = recent.length > 0 || rec.byDate.length > 0 || rec.byTopic.length > 0;
+  const summary = hasHistory ? summaryLine(answer) : null;
   if (summary) {
     const delta = `\n\n${summary}`;
     answer += delta;

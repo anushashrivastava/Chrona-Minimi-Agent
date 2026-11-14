@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite"; // built in: no native build step, `
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { describeDate, describeInstant, localDate, resolvePastDates, type TimeCtx } from "./time.js";
+import { describeDate, describeInstant, localDate, resolvePastDates, singlePastDay, type TimeCtx } from "./time.js";
 
 export interface Claim {
   claim: string; // e.g. "Pipedrive Essential costs $14/user/month"
@@ -235,6 +235,27 @@ function fmtTurn(t: TurnRow): string {
     );
   if (sources.length) lines.push("Sources then: " + sources.slice(0, 4).map((s) => s.url).join(", "));
   return lines.join("\n");
+}
+
+// References to a conversation WITH US only. "We shortlisted on Monday" is the user describing their own
+// week, not a claim that we spoke, so it must not trigger "I have no record of a conversation with you".
+const ASKS_ABOUT_US = /\b(did I ask|I asked you|you told me|you said|your answer|last time I asked)\b/i;
+
+/**
+ * A fixed first line for a question about a past conversation that does not exist. "No conversation on
+ * that day" is a fact code knows for certain; three rounds of prompt wording did not make the model state
+ * it reliably (it skipped it, or named the wrong date). Fires only when ALL hold:
+ *   1. the message refers to a conversation with us (ASKS_ABOUT_US);
+ *   2. it names exactly one explicit past day (not a range, not "last week");
+ *   3. nothing is saved on that day, nothing matches the topic on any other day, and the recent
+ *      transcript is empty: if anything related exists, the model must look at it instead.
+ */
+export function noRecordLead(text: string, r: Recall, recentCount: number, time: TimeCtx): string | null {
+  if (!ASKS_ABOUT_US.test(text)) return null;
+  const day = singlePastDay(text, time);
+  if (!day || !r.missingDates.includes(day)) return null;
+  if (r.byDate.length || r.byTopic.length || recentCount > 0) return null;
+  return `I have no record of a conversation with you on ${describeDate(day)}.`;
 }
 
 /**

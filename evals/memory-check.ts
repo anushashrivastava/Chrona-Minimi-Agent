@@ -1,7 +1,7 @@
 // Offline check (no API keys needed): the date + recall logic that powers "what did I ask on 3 November?".
 // Run: npm run check:memory
 import assert from "node:assert/strict";
-import { buildMemoryBrief, ftsQuery, recall, resetDb, saveTurn } from "../src/memory.js";
+import { buildMemoryBrief, ftsQuery, noRecordLead, recall, recentTurns, resetDb, saveTurn } from "../src/memory.js";
 import { localDate, resolvePastDates } from "../src/time.js";
 
 const tz = "Asia/Kolkata";
@@ -52,5 +52,33 @@ assert.match(recentBrief, /conversation on Tuesday,? 3 November 2026 is in the c
 const missing = buildMemoryBrief(recall("u", "What did I ask you on 5 November?", time));
 assert.match(missing, /No conversation is saved for Thursday,? 5 November 2026\./);
 assert.doesNotMatch(missing, /say so|do not guess|plainly/i); // facts only: no instructions the model could echo
+
+// --- cold-start lead: "I have no record of a conversation with you on <day>." and every guard ---
+const now14 = { now: new Date("2026-11-14T10:00:00+05:30"), tz }; // Saturday
+const lead = (text: string, recentCount?: number) =>
+  noRecordLead(text, recall("u", text, now14), recentCount ?? recentTurns("u").length, now14);
+resetDb(":memory:");
+assert.equal(lead("What did I ask you on 3 November? Is your answer still correct today?"), "I have no record of a conversation with you on Tuesday, 3 November 2026.");
+assert.equal(lead("Last Tuesday I asked you about Postgres hosting. Has any pricing changed?"), "I have no record of a conversation with you on Tuesday, 10 November 2026.");
+// guard 1: only references to a conversation WITH US ("we shortlisted" is the user's own week)
+assert.equal(lead("On Monday we shortlisted these: HubSpot, Pipedrive. Any pricing changes?"), null);
+assert.equal(lead("On Monday we shortlisted 5 CRM tools. Has any changed pricing?"), null);
+// guard 2: one explicit single day only
+assert.equal(lead("What did you tell me last week?"), null);
+assert.equal(lead("What did I ask you between 2 and 5 November?"), null);
+assert.equal(lead("What did I ask you on Monday or Tuesday?"), null);
+assert.equal(lead("What did I ask you today?"), null); // today is never "missing"
+// guard 3a: a turn exists on that day
+saveTurn({ userId: "u", ts: at("2026-11-03T14:02:00+05:30"), tz, userText: "cheapest managed Postgres host?", answerText: "Neon" });
+assert.equal(lead("What did I ask you on 3 November?", 0), null);
+// guard 3b: a topic match on ANOTHER day (recent window forced empty to isolate this guard)
+resetDb(":memory:");
+saveTurn({ userId: "u", ts: at("2026-11-05T09:00:00+05:30"), tz, userText: "Compare Postgres hosting options", answerText: "Neon vs Supabase" });
+for (let i = 0; i < 6; i++) saveTurn({ userId: "u", ts: at(`2026-11-12T1${i}:00:00+05:30`), tz, userText: `filler ${i}`, answerText: "ok" });
+assert.ok(recall("u", "Last Tuesday I asked you about Postgres hosting", now14).byTopic.length, "fixture: topic match exists");
+assert.equal(lead("Last Tuesday I asked you about Postgres hosting", 0), null);
+// guard 3c: anything in the recent transcript
+resetDb(":memory:");
+assert.equal(lead("What did I ask you on 3 November?", 1), null);
 
 console.log("✓ memory + time checks passed");

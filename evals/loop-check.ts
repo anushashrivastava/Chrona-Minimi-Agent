@@ -53,6 +53,13 @@ const mockGemini = http.createServer(async (req, res) => {
     res.write(sse(cand([{ text: "Node 24 is the current LTS " }])));
     // "bogus": cite a source number the search never returned ([7]) next to a real one
     res.write(sse(cand([{ text: /bogus/i.test(firstUser) ? "[1][7], per a guide [9]." : "[1]." }], "STOP")));
+  } else if (/restate/i.test(lastText)) {
+    // the model restates the code's lead line (as flash-lite did, word for word), split across chunks
+    res.write(sse(cand([{ text: "I have no record of a conv" }])));
+    res.write(sse(cand([{ text: "ersation with you on Tuesday, 3 November 2026.\n\nNode 24 is LTS." }], "STOP")));
+  } else if (/prelude/i.test(lastText)) {
+    // model writes some text, THEN decides to search: the server must reset, keeping its own lead line
+    res.write(sse(cand([{ text: "Let me check that. " }, { functionCall: { id: "p1", name: "web_search", args: { query: "node lts prelude" } } }], "STOP")));
   } else if (/latest/i.test(lastText)) {
     const q = /fail/i.test(lastText) ? "latest node lts (fail)" : "latest node lts"; // distinct query: bypass the search cache
     res.write(sse(cand([{ functionCall: { id: "c1", name: "web_search", args: { query: q } } }, { functionCall: { id: "c2", name: "web_search", args: { query: `${q} schedule`, since: "2026-01-01" } } }], "STOP")));
@@ -167,6 +174,28 @@ tavilyDown = false;
 assert.doesNotMatch(r4d.answer, /\[\d+\]/);
 assert.match(r4d.answer, /Web search failed for this answer, so none of it could be checked against sources\./);
 assert.doesNotMatch(r1.answer, /Web search failed/); // only when ALL searches failed
+
+// 4e. cold start: the fixed no-record lead is the first text, survives the pre-search reset, is saved,
+//     and the model is told it was already said (fresh user: empty history)
+const ev4e: { type: string; delta?: string }[] = [];
+const before4e = seen.length;
+const r4e = await runTurn({ userId: "cold", message: "What did I ask you on 3 November? (prelude)", time, onEvent: (e) => ev4e.push(e as any) });
+const leadLine = "I have no record of a conversation with you on Tuesday, 3 November 2026.\n\n";
+assert.equal(ev4e.find((e) => e.type === "text")?.delta, leadLine); // before any model output
+const iReset = ev4e.findIndex((e) => e.type === "reset");
+assert.ok(iReset > 0 && ev4e[iReset + 1]?.delta === leadLine, "lead re-sent after reset");
+assert.equal(r4e.answer, leadLine + "Node 24 is the current LTS [1].");
+assert.equal(allTurns("cold")[0].answer_text, r4e.answer);
+assert.match(seen[before4e].systemInstruction.parts[0].text, /Already told the user: "I have no record of a conversation with you on Tuesday, 3 November 2026\."/);
+assert.equal((await runTurn({ userId: "cold2", message: "On Monday we shortlisted X and Y. thanks", time })).answer, "You're welcome!"); // guard 1: no lead
+// a restated lead (split across stream chunks) is dropped before it is shown
+const shown4e: string[] = [];
+const r4f = await runTurn({ userId: "cold3", message: "What did I ask you on 3 November? (restate)", time, onEvent: (e) => e.type === "text" && shown4e.push(e.delta) });
+assert.equal(r4f.answer, leadLine + "Node 24 is LTS.");
+assert.equal(shown4e.join(""), r4f.answer); // what the user saw == what was saved, lead once
+// no history -> no computed tally, even if the model writes labelled then→now lines
+const r4g = await runTurn({ userId: "cold4", message: "Is it still correct?", time });
+assert.doesNotMatch(r4g.answer, /Summary:/);
 
 // 5. MODEL_FALLBACKS: a 503 on the primary falls through to the backup, and the turn stays on it
 calls.length = 0;

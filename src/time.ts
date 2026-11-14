@@ -90,9 +90,18 @@ export function describeInstant(ts: number, tz: string): string {
  * resolved date in the future is rolled back (a bare "Monday" -> most recent Monday;
  * "3 November" said in January -> last year's).
  */
-export function resolvePastDates(text: string, { now, tz }: TimeCtx): string[] {
+export function resolvePastDates(text: string, time: TimeCtx): string[] {
+  return [...new Set(pastRefs(text, time).map((r) => r.ymd))];
+}
+
+interface PastRef {
+  ymd: string;
+  singleDay: boolean; // a named date or weekday ("3 November", "Monday", "yesterday"), not "last week" or a range
+}
+
+function pastRefs(text: string, { now, tz }: TimeCtx): PastRef[] {
   const today = localDate(now, tz);
-  const out = new Set<string>();
+  const out: PastRef[] = [];
   const results = chrono.parse(text, { instant: now, timezone: tz }, { forwardDate: false });
   for (const r of results) {
     let d = r.start.date();
@@ -105,7 +114,22 @@ export function resolvePastDates(text: string, { now, tz }: TimeCtx): string[] {
       }
     }
     const ymd = localDate(d, tz);
-    if (ymd <= today) out.add(ymd); // future references ("tomorrow") aren't memory lookups
+    if (ymd > today) continue; // future references ("tomorrow") aren't memory lookups
+    // chrono marks "last week" as a certain day (7 days ago), so period words are rejected by text
+    const named = r.start.isCertain("day") || r.start.isCertain("weekday");
+    out.push({ ymd, singleDay: named && !r.end && !/\b(week|month|year|weekend)s?\b/i.test(r.text) });
   }
-  return [...out];
+  return out;
+}
+
+// chrono reads "between 2 and 5 November" as just "5 November"; a range is never a single day
+const RANGE = /\bbetween\b|\bfrom\b.+\b(to|until|till)\b|\d\s*(-|–|to)\s*\d/i;
+
+/** The one explicit past day the text names, or null if it names none, several, a range, or something vague. */
+export function singlePastDay(text: string, time: TimeCtx): string | null {
+  if (RANGE.test(text)) return null;
+  // "today" is the present ("is your answer still correct today?"), not a second past day
+  const today = localDate(time.now, time.tz);
+  const refs = pastRefs(text, time).filter((r) => r.ymd !== today);
+  return refs.length === 1 && refs[0].singleDay ? refs[0].ymd : null;
 }

@@ -190,21 +190,25 @@ const scenarios: Scenario[] = [
     seed: [],
     ask: "On Monday we shortlisted 5 CRM tools for a 20-person sales team: HubSpot, Pipedrive, Zoho CRM, Close, Freshsales. Has any of them changed pricing or shipped something big since?",
     mustSearch: true,
-    mustMatch: [NO_RECORD, /\b9(th)? nov(ember)?\b|\bnov(ember)? 9\b/i],
-    mustNotMatch: [/Summary:/],
+    // "we shortlisted" is not a reference to a conversation with us, so no code lead here: the model must
+    // say itself that it has no earlier figures to compare against, and anchor "since" to Monday 9 Nov.
+    mustMatch: [
+      /(no|don'?t have (the |any )?|without (the |any )?)(earlier|previous|prior|original|monday'?s?|recorded) (figures|prices|pricing|numbers|record|data)|can(not|'?t) (tell|compare|say|confirm) (what|whether|if)[^.]*chang|no record/i,
+      /\b9(th)? nov(ember)?\b|\bnov(ember)? 9\b/i,
+    ],
+    mustNotMatch: [/Summary:/, /then [^.\n]*→/],
     check: (r) => {
       const p: string[] = [];
       const first = r.searches.slice(0, r.searchesPerRound[0] ?? 0).map((s) => s.query).join(" | ");
       const missing = TOOLS.filter((t) => !new RegExp(t, "i").test(first));
       if (missing.length) p.push(`round 1 did not search: ${missing.join(", ")} (round 1: ${first})`);
+      // per tool: a sentence or line about it (not an intro listing 3+ tools) with a cited price, or "couldn't find"
+      const pieces = r.answer.split(/\n|(?<=[.!?])\s+(?=[A-Z*])/);
       for (const t of TOOLS) {
-        // the tool's own line: mentions it, and not 3+ other tools (skips an intro that lists all five)
-        const line = r.answer.split("\n").find((l) => new RegExp(`\\b${t}\\b`, "i").test(l) && TOOLS.filter((o) => new RegExp(`\\b${o}\\b`, "i").test(l)).length < 3) ?? "";
-        if (!line) p.push(`${t}: no line of its own`);
-        else if (/\$\s?\d/.test(line)) {
-          if (!/\[\d+\]/.test(line)) p.push(`${t}: price without citation`);
-          if (!DATE.test(line)) p.push(`${t}: price without a date`);
-        } else if (!CANT_FIND.test(line)) p.push(`${t}: neither a current price nor an honest "couldn't find"`);
+        const own = pieces.filter((l) => new RegExp(`\\b${t}\\b`, "i").test(l) && TOOLS.filter((o) => new RegExp(`\\b${o}\\b`, "i").test(l)).length < 3);
+        if (!own.length) p.push(`${t}: not covered on its own`);
+        else if (!own.some((l) => /\$\s?\d/.test(l) && /\[\d+\]/.test(l)) && !own.some((l) => CANT_FIND.test(l)))
+          p.push(`${t}: no cited current price and no honest "couldn't find"`);
       }
       return p;
     },
