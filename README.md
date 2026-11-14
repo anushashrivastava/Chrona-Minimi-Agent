@@ -34,3 +34,9 @@ Streams SSE events: `status`, `text`, `reset`, `sources`, `done`, `error`. Histo
 | `MODEL_FALLBACKS` | comma-separated models tried in order on 404/403/503 (default: the two lite models back each other up) |
 | `THINKING_BUDGET` | leave empty. The default model already uses 0 thinking tokens, and `0` is rejected with a 400 by `gemini-3.5-flash-lite` |
 | `ALLOW_FAKE_NOW=1` | testing only: honour the `x-fake-now` header |
+
+## Known limitations
+Measured on `gemini-3.5-flash-lite` (free tier) with small samples; details and exact answers in [docs/failures.md](docs/failures.md).
+- **"Last Tuesday I asked you about X. Has pricing changed?" with no saved history**: the "no record of Tuesday, 10 November" line is stated by code and always correct, but the model does not always answer the current part: in 3 runs, 2 gave cited current prices and 1 gave none; one of the good runs still said a price "remains" without an earlier value to compare.
+- **"On Monday we shortlisted HubSpot, Pipedrive, ..." with no saved history**: gives cited current prices and news per tool, but does not say it has no earlier figures to compare against or name Monday's date.
+- **A reference to a list that was never given, when unrelated history exists** (e.g. "has anything on the shortlist changed?" after an unrelated chat): asks which list about half the time; otherwise it treats an unrelated item from history as the list or answers without asking.
