@@ -1,0 +1,24 @@
+# Failures found (Step 3-4, 2026-11-14)
+Model `gemini-3.5-flash-lite`, summary `gemini-3.1-flash-lite`, Tavily basic. Ordered by impact. Fixed ones say so.
+
+## Fixed already
+- **F0 Memory brief contradicted the transcript.** "What did I ask you on 3 November?" with a short history: the 3 Nov turn was in the recent window, so recall dropped it and the brief said "NO saved turns on that date. Say so plainly". Fixed in `memory.ts`, regression in `check:memory`.
+- **F1 `sources` and `done` SSE events were dropped.** Live answers had no clickable citations or timing line. Fixed in `server.ts`.
+- **F2 Default models unusable for new keys.** 2.5 models: 404 "no longer available to new users"; 3.5/3.8-flash: 27 s+ or 503. Switched defaults, doctor calls both models.
+
+## Open
+1. **"Has pricing changed?" answers "Unchanged" on thin evidence.**
+   Input (fake now Sat 14 Nov, after a real Monday turn listing 5 CRM prices): "On Monday we shortlisted 5 CRM tools. Has any changed pricing since?"
+   Searches: 5 queries, all with `since=2026-11-09`, none without it.
+   Output: `**Unchanged.** Pricing across all five platforms ... remains consistent with Monday's rates [1][2][8][10][11].`
+   Problem: pricing pages are rarely republished, so `since` mostly returns fresh blog posts; no current price is stated per tool, so the user can't see what was compared. Should list each tool with old vs current price, or "could not confirm".
+2. **Inconsistent "latest Node.js" answers across runs.** Run 1: "latest LTS is Node.js 26 (v26.13.0)" [nodejs.org]. Eval run: "Node.js v24.22.2 ... is the latest LTS release as of October 2026". Same question, contradictory answers. Also "latest stable" was answered as LTS only, ignoring Current.
+3. **Searches run sequentially across rounds instead of in parallel.** "latest stable Node.js": 3 searches over 4 rounds, first token 8.5-18.5 s (eval `fresh-fact` fails its 15 s budget). The 5-CRM turn did it right (5 parallel searches, 5.2 s), so the model can; single-topic questions trigger refine-and-retry.
+4. **Background summary fails with 503 on `gemini-3.1-flash-lite`** (2 of 4 eval turns). No retry, so the turn is saved without claims, and "is it still correct?" later has nothing structured to re-check.
+5. **Needless search when the answer is "tell me the list".** Eval `missing-shortlist`: answer was right (asked for the 5 tools, no invention) but it first searched "CRM tools for 20 person sales team", costing ~2.5 s and a Tavily credit.
+
+## Worked well (keep)
+- Recall by date, with the exact question and answer, in 1.2 s, no search.
+- "No record" for a date with no turns; no invented conversation.
+- 5 parallel searches for 5 items, all with `since` set to the right date (memory brief + clock worked).
+- Chit-chat answered in 0.7 s without searching.
