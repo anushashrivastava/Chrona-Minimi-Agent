@@ -1,4 +1,4 @@
-# Failures found (Step 3-4, 2026-11-14)
+# Failures found (Step 3-4, 2026-11-14; status updated after fixes 1-4)
 Model `gemini-3.5-flash-lite`, summary `gemini-3.1-flash-lite`, Tavily basic. Ordered by impact. Fixed ones say so.
 
 ## Fixed already
@@ -7,15 +7,19 @@ Model `gemini-3.5-flash-lite`, summary `gemini-3.1-flash-lite`, Tavily basic. Or
 - **F2 Default models unusable for new keys.** 2.5 models: 404 "no longer available to new users"; 3.5/3.8-flash: 27 s+ or 503. Switched defaults, doctor calls both models.
 
 ## Open
-1. **"Has pricing changed?" answers "Unchanged" on thin evidence.**
+1. **FIXED (fix 1)**: **"Has pricing changed?" answers "Unchanged" on thin evidence.**
    Input (fake now Sat 14 Nov, after a real Monday turn listing 5 CRM prices): "On Monday we shortlisted 5 CRM tools. Has any changed pricing since?"
    Searches: 5 queries, all with `since=2026-11-09`, none without it.
    Output: `**Unchanged.** Pricing across all five platforms ... remains consistent with Monday's rates [1][2][8][10][11].`
    Problem: pricing pages are rarely republished, so `since` mostly returns fresh blog posts; no current price is stated per tool, so the user can't see what was compared. Should list each tool with old vs current price, or "could not confirm".
-2. **Inconsistent "latest Node.js" answers across runs.** Run 1: "latest LTS is Node.js 26 (v26.13.0)" [nodejs.org]. Eval run: "Node.js v24.22.2 ... is the latest LTS release as of October 2026". Same question, contradictory answers. Also "latest stable" was answered as LTS only, ignoring Current.
-3. **Searches run sequentially across rounds instead of in parallel.** "latest stable Node.js": 3 searches over 4 rounds, first token 8.5-18.5 s (eval `fresh-fact` fails its 15 s budget). The 5-CRM turn did it right (5 parallel searches, 5.2 s), so the model can; single-topic questions trigger refine-and-retry.
-4. **Background summary fails with 503 on `gemini-3.1-flash-lite`** (2 of 4 eval turns). No retry, so the turn is saved without claims, and "is it still correct?" later has nothing structured to re-check.
-5. **Needless search when the answer is "tell me the list".** Eval `missing-shortlist`: answer was right (asked for the 5 tools, no invention) but it first searched "CRM tools for 20 person sales team", costing ~2.5 s and a Tavily credit.
+2. **FIXED (fix 2), cause was stale page snapshots**: **Inconsistent "latest Node.js" answers across runs.** Run 1: "latest LTS is Node.js 26 (v26.13.0)" [nodejs.org]. Eval run: "Node.js v24.22.2 ... is the latest LTS release as of October 2026". Same question, contradictory answers. Also "latest stable" was answered as LTS only, ignoring Current.
+3. **PARTLY FIXED (fix 2)**: first round is now parallel; some runs add a refinement round (+4-5 s). Round cap to be decided in Step 7. **Searches run sequentially across rounds instead of in parallel.** "latest stable Node.js": 3 searches over 4 rounds, first token 8.5-18.5 s (eval `fresh-fact` fails its 15 s budget). The 5-CRM turn did it right (5 parallel searches, 5.2 s), so the model can; single-topic questions trigger refine-and-retry.
+4. **FIXED (fix 3 + MODEL_FALLBACKS)**: **Background summary fails with 503 on `gemini-3.1-flash-lite`** (2 of 4 eval turns). No retry, so the turn is saved without claims, and "is it still correct?" later has nothing structured to re-check.
+5. **MODEL LIMIT (fix 4)**: answer is right (asks, invents nothing) but flash-lite still does 1 search, 9/9 runs across 3 levers. **Needless search when the answer is "tell me the list".** Eval `missing-shortlist`: answer was right (asked for the 5 tools, no invention) but it first searched "CRM tools for 20 person sales team", costing ~2.5 s and a Tavily credit.
+
+## New (found in the full run after fixes)
+6. **Verdict miscounts its own labels.** Eval `still-correct`: item line "Supabase Pro pricing: then $25/month per project → now $25/month per organization + usage [1][2] — Changed", then "**Verdict:** 0 changed, 0 unchanged, 1 could not confirm". The eval passed it (regex too weak). Candidate fix in code: recount the `— <label>` lines and correct the verdict line.
+7. **Model latency swings unrelated to search.** `missing-shortlist`: 2.9-6.2 s earlier, 14.6 s in the full run with the same single search. Free-tier load; measure medians in Step 7 rather than single runs.
 
 ## Worked well (keep)
 - Recall by date, with the exact question and answer, in 1.2 s, no search.
