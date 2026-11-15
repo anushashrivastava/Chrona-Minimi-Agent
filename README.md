@@ -1,4 +1,4 @@
-# Minimi Agent
+# CHRONA
 
 A chat agent with one tool (web search) and time-aware memory. It answers with cited, dated sources and remembers what you asked and when, so it can answer "What did I ask you on 3 November? Is your answer still correct today?". How and why it is built this way: [DESIGN.md](DESIGN.md).
 
@@ -10,8 +10,8 @@ A chat agent with one tool (web search) and time-aware memory. It answers with c
 
 **1. Install**
 ```bash
-git clone https://github.com/anushashrivastava/Minimi-Agent.git
-cd Minimi-Agent
+git clone https://github.com/anushashrivastava/Chrona-Minimi-Agent.git
+cd Chrona-Minimi-Agent
 npm install
 ```
 
